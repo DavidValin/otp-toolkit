@@ -78,7 +78,7 @@ fi
 
 # Version as declared in the cli.c banner, so the report can never drift
 # from the source on a version bump.
-VERSION=$(sed -n 's/.*otp v\([0-9][0-9.]*\).*/\1/p' src/cli.c | head -1)
+VERSION=$(sed -n 's/.*otp-toolkit v\([0-9][0-9.]*\).*/\1/p' src/cli.c | head -1)
 
 . test/reportlib.sh
 
@@ -163,7 +163,7 @@ fi
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>otp v$VERSION test report</title>
+<title>otp-toolkit v$VERSION test report</title>
 <style>
 :root {
   --bg: #ffffff; --fg: #1a1a1a; --muted: #6a6a6a; --line: #d8d8d8;
@@ -220,7 +220,7 @@ b.pass { color: var(--pass); } b.fail { color: var(--fail); }
 </style>
 </head>
 <body>
-<h1>otp v$VERSION <span class="repo">- <a href="$REPO_URL">$REPO_URL</a></span></h1>
+<h1>otp-toolkit v$VERSION <span class="repo">- <a href="$REPO_URL">$REPO_URL</a></span></h1>
 <p class="subtitle">$run_date &middot; click "Source" inside a group to see its test script</p>
 <div class="verdict $vclass">$verdict</div>
 <div class="verdict $cvclass">$cverdict</div>

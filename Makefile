@@ -1,10 +1,8 @@
-# Detect operating system and set compiler flags
 OS := $(shell uname -s 2>/dev/null)
 ifeq ($(OS),)
   OS := Windows_NT
 endif
 
-# Default compiler and binary extension
 ifeq ($(OS),Windows_NT)
   CC := cl
   BIN_EXT := .exe
@@ -18,9 +16,12 @@ endif
 
 BIN := bin/otp$(BIN_EXT)
 
-# `test` must be phony: a directory named test/ exists, so without this
-# make would consider the target permanently up to date and do nothing.
-.PHONY: test
+VERSION := $(shell sed -n 's/.*otp-toolkit v\([0-9][0-9.]*\).*/\1/p' src/cli.c 2>/dev/null | head -1)
+ifeq ($(VERSION),)
+  VERSION := (unknown version)
+endif
+
+.PHONY: build test install
 
 build:
 	@echo
@@ -36,29 +37,21 @@ build:
 	@sh test/report.sh || { rm -f $(BIN); exit 1; }
 	@echo " - Tested!"
 	@echo
+	@echo "otp-toolkit $(VERSION) command is built in ./$(BIN)"
+	@echo "Run 'sudo make install' now to install it system wide."
+	@echo
 
-# Run the full test suite via test/report.sh, which executes every test
-# script (continuing past failures so the report is complete) and renders
-# test-report.html - colored, expandable per-test results with output and
-# source - in the current directory. Exits non-zero if any script failed.
-#
-# `build` above calls this same script directly (rather than invoking
-# `bash test/*.test.sh` one at a time and stopping at the first failure):
-# every test case must run and land in test-report.html even when some of
-# them fail, so a CI run that fails still has a complete, colored report
-# to inspect instead of a log truncated at the first red line. And on that
-# failure, `build` removes the binary it just compiled: a build whose
-# tests didn't all pass leaves nothing at $(BIN) to install, archive, or
-# upload, not just a non-zero exit code that a careless caller could
-# ignore while the binary sits there looking legitimate.
 test:
+	@echo " - Testing..."
 	@sh test/report.sh
+	@echo " - Tested!"
+	@echo
 
-# Depends on `build`, not just the compiled binary, so a failing self-test
-# (any `bash test/*.test.sh` line above returning non-zero) aborts here
-# too - install can never run against a binary that hasn't just passed
-# its own test suite, no matter how this target is invoked.
-install: build
+install:
+	@if [ ! -f $(BIN) ]; then \
+		echo "Error: $(BIN) not found - run 'make' first, then 'sudo make install'"; \
+		exit 1; \
+	fi
 	@echo
 	@echo " - Installing..."
 	@if [ "$(OS)" = "Windows_NT" ]; then \
@@ -72,7 +65,6 @@ install: build
 	@cp otp.1 /usr/local/share/man/man1/otp.1
 	@echo " - Man page installed to /usr/local/share/man/man1/otp.1"
 
-# Static musl build only for Unix-like systems
 ifneq ($(OS),Windows_NT)
 musl:
 	@echo
@@ -85,10 +77,6 @@ musl:
 	@echo " - Tested!"
 	@echo
 
-# Cross-compile a Windows binary with MinGW-w64 (the native Windows build
-# above uses cl). Also serves as the Windows-compatibility check on a
-# POSIX machine: it compiles every Windows branch against the real Win32
-# and CRT headers with all warnings on.
 mingw:
 	@echo
 	@echo " - Cross-compiling Windows binary with MinGW-w64..."
@@ -97,18 +85,6 @@ mingw:
 	@echo " - Built bin/otp.exe!"
 	@echo
 
-# Cross-compile Linux binaries for foreign architectures with the GNU
-# cross toolchains (gcc-aarch64-linux-gnu / gcc-arm-linux-gnueabihf /
-# gcc-riscv64-linux-gnu). A cross-built binary cannot be executed by the
-# build machine directly, so these targets build only; the test-arm32 and
-# test-riscv64 targets below run the full suite against them under
-# qemu-user emulation (arm64 is instead tested natively, both in CI and
-# by `make build` on any arm64 host). arm32 and riscv64 are built static:
-# the program uses no NSS/dlopen functionality, so static (glibc) linking
-# is safe, and it makes the binary run on any distribution - and under
-# qemu with no target sysroot. _FILE_OFFSET_BITS=64 matters most on
-# arm32, where off_t is 32-bit by default and keys over 2GB would fail
-# without it.
 arm64:
 	@echo
 	@echo " - Cross-compiling Linux arm64 binary..."
@@ -133,17 +109,6 @@ riscv64:
 	@echo " - Built bin/otp (riscv64)!"
 	@echo
 
-# Run the full test suite against a cross-built binary under qemu
-# user-mode emulation - the same coverage CI has, runnable locally.
-# Needs the matching qemu binary on PATH (package: qemu-user or
-# qemu-user-static). bin/otp is temporarily replaced by a wrapper that
-# routes every ./bin/otp invocation through qemu, and the real binary is
-# put back when the suite finishes, pass or fail. Every script in the list
-# runs regardless of earlier ones failing (rc only ever latches to 1, the
-# loop never stops early), so a failure never hides whether the rest pass.
-# The real binary is restored either way, but on failure it's then removed
-# entirely - same reasoning as build/musl: a binary whose tests didn't all
-# pass leaves nothing behind to install, archive, or upload.
 test-arm32: arm32
 	@echo " - Testing arm32 binary under qemu..."
 	@QEMU=$$(command -v qemu-arm || command -v qemu-arm-static); \
@@ -174,7 +139,6 @@ test-riscv64: riscv64
 	if [ $$rc -eq 0 ]; then echo " - Tested!"; else rm -f bin/otp; fi; \
 	exit $$rc
 
-# Same reasoning as `install: build` above, against the musl target instead.
 install-musl: musl
 	@echo
 	@echo " - Installing musl binary..."
