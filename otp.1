@@ -1,6 +1,6 @@
 # OTP manual page
 
-.TH OTP 1 "2026-08-21" "OTP v1.6.0" "User Commands"
+.TH OTP 1 "2026-08-23" "otp-toolkit v1.6.0" "User Commands"
 
 .SH NAME
 otp \- simple one-time pad encryption/decryption utility
@@ -41,6 +41,9 @@ otp \- simple one-time pad encryption/decryption utility
 .br
 .B otp
 --add-rand-to-vault <size_in_MB>
+.br
+.B otp
+[-x | --xor] <bytes>
 
 .SH DESCRIPTION
 This program takes data from standard input, XORs it with one-time-pad key material held in a keychain of contacts, and writes the result to standard output.  Consumed key material is removed from the key files automatically, so a spent key range can never be reused.  It also allows generating key pairs and managing the keychain of contacts.
@@ -98,6 +101,10 @@ Stream the kept safety copy of the last delivered payload to standard output: \f
 .B \-\-add-rand-to-vault <size_in_MB>
 Read <size_in_MB> megabytes of randomness from standard input and store it in the keychain's randomness vault (.keychain/_randomness): appended to the end of the existing file if the vault already exists, or created with mode 0600 if it does not.  The bytes are stored exactly as read, with no transformation.  Standard input must be a pipe or a file, with the same terminal-refusal behavior as \fB--new-key-pair\fP.  The vault is not assigned to any contact and, at this point, is not itself consumed or tracked as key material - it exists purely as accumulated storage.  It is still guarded like a contact: an exclusive \fBflock()\fP on .keychain/_randomness.lock serializes concurrent invocations, and the incoming bytes are staged and read-back verified in full before the vault itself is ever touched, so a short read from stdin leaves it unchanged rather than partially appended.  On success, prints OK followed by a blank line and a summary of how much was just added and the vault's new running total, both in megabytes and exact bytes.  Example: cat /dev/urandom | otp --add-rand-to-vault 100
 
+.TP
+.B \-x, \-\-xor <bytes>
+XOR standard input against <bytes> \- any readable file or character device \- starting at its offset 0, and write the result to standard output.  Raw plumbing, deliberately outside the keychain: <bytes> is only read, never truncated, and no metadata block, sequence number, source_id or delivery confirmation is involved \- so nothing here prevents the same key bytes from covering a second message, which is exactly the reuse that collapses one-time-pad secrecy (see SECURITY CONSIDERATIONS).  Use \fB-c <contact> --encrypt\fP/\fB--decrypt\fP for key material the keychain should account for; use this for keys managed entirely by the caller, and for combining randomness sources.  XOR is its own inverse, so the same invocation encrypts and decrypts.  Input and key are streamed in 4 MB chunks, so neither is ever held in memory whole and <bytes> may be a character device such as \fB/dev/urandom\fP or \fB/dev/hwrng\fP.  Exits 1 if <bytes> is shorter than the input, naming how many bytes were XORed before it ran out; whole chunks already written to stdout stand.  Example, mixing two independent randomness sources into the vault: cat /dev/urandom | otp --xor /dev/hwrng | otp --add-rand-to-vault 10 \- XORing independent sources yields randomness at least as unpredictable as the strongest of them, so a biased or compromised source cannot weaken the result (two draws from the same source add nothing).
+
 .SH USAGE
 
 .SS Using the Keychain System
@@ -110,6 +117,21 @@ To decrypt using a contact's key from the keychain:
 .B cat cipher.txt | otp -c contact_name --decrypt > plain.txt
 .PP
 The keychain automatically manages key consumption and updates the contact's metadata; the remaining key is stored in the keychain.
+
+.SS Raw XOR, outside the keychain
+To XOR standard input against a file of bytes you manage yourself:
+.PP
+.B cat data | otp --xor key.bin > data.xored
+.PP
+The same invocation reverses it, XOR being its own inverse:
+.PP
+.B cat data.xored | otp --xor key.bin > data
+.PP
+Nothing is consumed or recorded: key.bin is byte-identical afterwards, and it is entirely on you never to cover a second message with the same bytes.  Because the key may be any readable file, including a character device, this is also how independent randomness sources are combined:
+.PP
+.B cat /dev/urandom | otp --xor /dev/hwrng | otp --add-rand-to-vault 10
+.PP
+Each stage draws from its own source, so the vault receives randomness at least as unpredictable as the strongest of them.
 
 .SH NEW KEY PAIR GENERATION
 Use the \fB-nk\fP or \fB--new-key-pair\fP flag to generate a new key pair from a source of randomness.
@@ -586,6 +608,10 @@ An error occurred (unknown contact, unreadable key file).
 For
 .B \-\-recover-last:
 0 the copy was streamed, 2 no copy exists (nothing awaits delivery confirmation in that direction), 1 an error occurred.
+.PP
+For
+.B \-\-xor:
+0 the whole input was XORed and written, 1 an error occurred (no <bytes> argument given, <bytes> could not be opened, <bytes> was shorter than the input, or stdin/stdout failed).
 .PP
 All other keychain commands return 0 on success and 1 on failure, except
 .B \-\-has-contact,

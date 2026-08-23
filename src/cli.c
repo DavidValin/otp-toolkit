@@ -36,6 +36,9 @@
 #include "cipher.h"
 #include "compat.h"
 
+/* Streaming chunk for --xor, matching the 4MB chunk encrypt/decrypt use. */
+#define XOR_CHUNK_SIZE (4 * 1024 * 1024)
+
 #ifndef _WIN32
 #define O_BINARY 0
 #endif
@@ -156,7 +159,12 @@ static void keypair_spinner_tick(void)
  * wrapped line reads as a visually indented continuation rather than
  * a new list item flush against the margin. */
 #define OTP_HELP_WIDTH 70
-static void otp_print_wrapped_indented(const char *text, size_t extra_indent)
+/* `color` (an empty string for none) is applied per printed line rather
+ * than around the whole block: the escapes are emitted after each
+ * line's indent and closed before its newline, so they never enter the
+ * width arithmetic below - which counts bytes - and a wrapped colored
+ * line cannot leak its color across the newline into the next one. */
+static void otp_print_wrapped_colored(const char *text, size_t extra_indent, const char *color)
 {
   const char *line = text;
   while (*line)
@@ -182,6 +190,7 @@ static void otp_print_wrapped_indented(const char *text, size_t extra_indent)
     {
       for (size_t i = 0; i < indent; i++)
         putchar(' ');
+      fputs(color, stdout);
     }
     size_t col = indent;
     int first_word = 1;
@@ -197,9 +206,12 @@ static void otp_print_wrapped_indented(const char *text, size_t extra_indent)
        * yet - a word there never needs an extra wrap check. */
       if (!first_word && col + 1 + wlen > OTP_HELP_WIDTH)
       {
+        if (*color)
+          fputs(OTP_RESET, stdout);
         putchar('\n');
         for (size_t i = 0; i < cont_indent; i++)
           putchar(' ');
+        fputs(color, stdout);
         col = cont_indent;
         first_word = 1;
       }
@@ -215,6 +227,8 @@ static void otp_print_wrapped_indented(const char *text, size_t extra_indent)
       while (pos < linelen && line[pos] == ' ')
         pos++;
     }
+    if (*color && src_indent < linelen)
+      fputs(OTP_RESET, stdout);
     putchar('\n');
 
     if (!nl)
@@ -222,9 +236,13 @@ static void otp_print_wrapped_indented(const char *text, size_t extra_indent)
     line = nl + 1;
   }
 }
+static void otp_print_wrapped_indented(const char *text, size_t extra_indent)
+{
+  otp_print_wrapped_colored(text, extra_indent, "");
+}
 static void otp_print_wrapped(const char *text)
 {
-  otp_print_wrapped_indented(text, 0);
+  otp_print_wrapped_colored(text, 0, "");
 }
 
 /* --add-contact reports OK/FAIL with the summary/reason recolored yellow
@@ -359,6 +377,14 @@ int main(int argc, char *argv[])
         {"--add-rand-to-vault <size_in_MB>",
          "Read <size_in_MB> megabytes of randomness from stdin and store it in the keychain's randomness vault (.keychain/_randomness): appended if the vault already exists, created with mode 0600 if not. The bytes are stored exactly as read, byte for byte. Not tied to any contact - the vault is not itself consumed or tracked as key material, just accumulated storage. On success reports OK followed by how much was just added and the vault's new running total."},
     };
+    /* Commands that do not touch the keychain at all - no contact, no
+     * key accounting, no metadata - listed apart so the separation is
+     * visible in the help itself, not just in the prose. */
+    static const char *utils[][3] = {
+        {"--xor <bytes> (or -x)",
+         "DO NOT USE THIS METHOD TO ENCRYPT/DECRYPT FOR A CONTACT, USE THE KEYCHAIN ENCRYPT/DECRYPT COMMAND",
+         "XOR stdin against <bytes> - any readable file or character device, read from its offset 0 - and write the result to stdout. Raw plumbing, outside the keychain: <bytes> is only read, never truncated, and no metadata, sequence number, source_id or delivery confirmation is involved - so nothing here prevents the same bytes from covering a second message, which breaks the one-time-pad guarantee. XOR is its own inverse, so the same invocation encrypts and decrypts. Exits 1 if <bytes> is shorter than the input (the bytes already written stand)."},
+    };
     /* Banner: the title as a black-on-white chip, one space of padding
      * inside the highlight on each side, flush against the left edge.
      * Piped output gets the plain line instead. */
@@ -367,11 +393,54 @@ int main(int argc, char *argv[])
       printf("%s otp-toolkit v1.6.0 - One Time Pad toolkit %s\n", OTP_BLACK_ON_WHITE, OTP_RESET);
     else
       puts("otp-toolkit v1.6.0 - One Time Pad toolkit");
-    otp_print_wrapped("\nEncrypt and decrypt messages with the one-time pad, the only cipher with proven perfect secrecy. Messages stream from stdin to stdout; the key material lives in a keychain of contacts, each holding one pad per direction. Every operation consumes its key bytes and physically destroys them - crash-safely, so no key range can ever cover two messages, even across interrupted runs.\n\nUses:\n  Encrypt (using keychain):\n    echo \"plain\" | otp -c <contact_name> --encrypt > cipher.txt\n  \n  Decrypt (using keychain):\n    cat cipher.txt | otp -c <contact_name> --decrypt > plain.txt\n  \n  Generate key pair:\n    cat /dev/urandom | otp --new-key-pair <size_in_MB> <part_a_name> <part_b_name>\n    Writes each party's keys into its own directory, named for the correspondent:\n      <part_a_name>_keys/encryption_for_<part_b_name>.key and <part_a_name>_keys/decryption_from_<part_b_name>.key\n      <part_b_name>_keys/encryption_for_<part_a_name>.key and <part_b_name>_keys/decryption_from_<part_a_name>.key\n    Run with no pipe (stdin a terminal), it offers the randomness vault instead of refusing, when the vault holds enough (2x <size_in_MB>, since a pair draws two independent pads).\n  \n  Add randomness to the vault:\n    cat /dev/urandom | otp --add-rand-to-vault <size_in_MB>\n    Appends (or creates) .keychain/_randomness with that much randomness, stored exactly as read.\n\nKeychain Commands:");
+    otp_print_wrapped("\nEncrypt and decrypt messages with the one-time pad, the only cipher with proven perfect secrecy. Messages stream from stdin to stdout; the key material lives in a keychain of contacts, each holding one pad per direction. Every operation consumes its key bytes and physically destroys them - crash-safely, so no key range can ever cover two messages, even across interrupted runs.\n\nUses:");
+    /* Each use is a heading, the shell line itself, and an optional
+     * note. Only the shell line is colored; it goes through the same
+     * wrapper as everything else here, so a long command wraps and
+     * indents its continuation exactly like the surrounding text. */
+    static const char *uses[][3] = {
+        {"Encrypt (using keychain):",
+         "echo \"plain\" | otp -c <contact_name> --encrypt > cipher.txt",
+         NULL},
+        {"Decrypt (using keychain):",
+         "cat cipher.txt | otp -c <contact_name> --decrypt > plain.txt",
+         NULL},
+        {"Generate key pair:",
+         "cat /dev/urandom | otp --new-key-pair <size_in_MB> <part_a_name> <part_b_name>",
+         "Writes each party's keys into its own directory, named for the correspondent:\n  <part_a_name>_keys/encryption_for_<part_b_name>.key and <part_a_name>_keys/decryption_from_<part_b_name>.key\n  <part_b_name>_keys/encryption_for_<part_a_name>.key and <part_b_name>_keys/decryption_from_<part_a_name>.key\nRun with no pipe (stdin a terminal), it offers the randomness vault instead of refusing, when the vault holds enough (2x <size_in_MB>, since a pair draws two independent pads)."},
+        {"Add randomness to the vault:",
+         "cat /dev/urandom | otp --add-rand-to-vault <size_in_MB>",
+         "Appends (or creates) .keychain/_randomness with that much randomness, stored exactly as read."},
+        {"Mix two sources of randomness into the vault:",
+         "cat /dev/urandom | otp --xor /dev/hwrng | otp --add-rand-to-vault 10",
+         "XORing independent sources yields randomness at least as unpredictable as the strongest of them, so a biased or compromised source cannot weaken the result. /dev/hwrng is the raw hardware RNG (present only on machines that have one, and typically root-readable); any independent source works - two draws from the same one add nothing."},
+    };
+    const char *cmd_color = otp_stdout_is_tty() ? OTP_GREEN : "";
+    for (size_t i = 0; i < sizeof(uses) / sizeof(uses[0]); i++)
+    {
+      printf("  %s\n", uses[i][0]);
+      otp_print_wrapped_colored(uses[i][1], 4, cmd_color);
+      if (uses[i][2])
+        otp_print_wrapped_indented(uses[i][2], 4);
+      putchar('\n');
+    }
+    otp_print_wrapped("Keychain Commands:");
     for (size_t i = 0; i < sizeof(cmds) / sizeof(cmds[0]); i++)
     {
       printf("  %s%s%s\n", hl, cmds[i][0], rs);
       otp_print_wrapped_indented(cmds[i][1], 4);
+    }
+    otp_print_wrapped("\nUtility commands:");
+    /* The warning goes directly under the signature, before the
+     * description, and in red on a terminal: this command is the one
+     * way to produce ciphertext the keychain never accounts for, so a
+     * reader must meet that before the convenience of the mode. */
+    const char *warn_color = otp_stdout_is_tty() ? OTP_RED : "";
+    for (size_t i = 0; i < sizeof(utils) / sizeof(utils[0]); i++)
+    {
+      printf("  %s%s%s\n", hl, utils[i][0], rs);
+      otp_print_wrapped_colored(utils[i][1], 4, warn_color);
+      otp_print_wrapped_indented(utils[i][2], 4);
     }
     otp_print_wrapped("\nSafety copies:\n  Each keychain encrypt/decrypt keeps an exact copy of its stdout payload at .keychain/<contact>.last_sent (ciphertext) or .keychain/<contact>.last_received (plaintext), so a forgotten redirect cannot lose a message whose key bytes are already destroyed. The copy is removed automatically (no manual cleanup needed) when the next operation in that direction confirms delivery; if delivery is rejected, otp offers to recover the copy to a file. --recover-last streams the copy at any time without consuming it.\n\nExternal integration:\n  Programs driving otp need no library: --status answers, from the disk files alone, everything a client must know before its next operation (is a crash-recovery redelivery pending? is the previous message still unconfirmed?), --recover-last re-emits the kept copy for re-transmission or re-delivery, and the -c exit codes report each operation's outcome: 0 processed, 8 redelivered, 1 error - and on --decrypt, the metadata validation codes 1 invalid source_id, 2 invalid seq, 3 invalid offset, 4 source_id+seq, 7 source_id+offset, 6 seq+offset, 5 all three (a rejected message consumes no key). Delivery confirmation stays with the integrating program: pass -y on the next operation once the peer acknowledged the previous message. See the \"External Integrations\" section of README.md for the full send/receive flow.\n");
     return 0;
@@ -699,6 +768,93 @@ int main(int argc, char *argv[])
     if (result > 0)
       return result;
     return result == KEYCHAIN_OK ? 0 : 1;
+  }
+
+  /* **************************************************************************
+   *  Handles -x (--xor) command                                              *
+   * *********************************************************************** */
+
+  if (argc >= 2 && (strcmp(argv[1], "-x") == 0 || strcmp(argv[1], "--xor") == 0))
+  {
+    if (argc < 3)
+    {
+      fprintf(stderr, "Error: --xor requires <bytes>, a file or device to XOR against\n");
+      fprintf(stderr, "Usage: cat data | otp --xor <bytes> > out\n");
+      return 1;
+    }
+
+    /* Raw XOR: stdin against the bytes of <bytes>, from its offset 0,
+     * straight to stdout. Deliberately outside the keychain - it reads
+     * that file and never truncates it, keeps no metadata, no
+     * sequence, no source_id, and asks for no delivery confirmation - so
+     * NOTHING here stops the same key bytes from covering a second
+     * message. That accounting is what -c <contact> --encrypt/--decrypt
+     * exists to provide; this is the plumbing primitive for keys managed
+     * entirely by the caller. XOR is its own inverse, so the same
+     * invocation encrypts and decrypts. */
+    FILE *keyfile = fopen(argv[2], "rb");
+    if (!keyfile)
+    {
+      fprintf(stderr, "Error: Cannot open '%s': %s\n", argv[2], strerror(errno));
+      return 1;
+    }
+
+    unsigned char *data = malloc(XOR_CHUNK_SIZE);
+    unsigned char *pad = malloc(XOR_CHUNK_SIZE);
+    if (!data || !pad)
+    {
+      fprintf(stderr, "Error: Failed to allocate memory\n");
+      free(data);
+      free(pad);
+      fclose(keyfile);
+      return 1;
+    }
+
+    /* Streamed in chunks so the key and the input are never held in
+     * memory whole - the same reason encrypt/decrypt stream. The input
+     * length is unknowable in advance (stdin is typically a pipe), so a
+     * key that runs out is caught mid-stream: the chunks already written
+     * stand, and the error says how much was covered before the key
+     * ended. */
+    int rc = 0;
+    size_t written = 0;
+    size_t n;
+    while ((n = fread(data, 1, XOR_CHUNK_SIZE, stdin)) > 0)
+    {
+      if (fread(pad, 1, n, keyfile) != n)
+      {
+        fprintf(stderr,
+                "Error: '%s' is shorter than the input; %zu bytes were XORed "
+                "before it ran out\n",
+                argv[2], written);
+        rc = 1;
+        break;
+      }
+      for (size_t i = 0; i < n; i++)
+        data[i] ^= pad[i];
+      if (fwrite(data, 1, n, stdout) != n)
+      {
+        fprintf(stderr, "Error: Failed to write to stdout: %s\n", strerror(errno));
+        rc = 1;
+        break;
+      }
+      written += n;
+    }
+    if (rc == 0 && ferror(stdin))
+    {
+      fprintf(stderr, "Error: Failed to read from stdin: %s\n", strerror(errno));
+      rc = 1;
+    }
+
+    free(data);
+    free(pad);
+    fclose(keyfile);
+    if (fflush(stdout) != 0)
+    {
+      fprintf(stderr, "Error: Failed to write to stdout: %s\n", strerror(errno));
+      rc = 1;
+    }
+    return rc;
   }
 
   /* **************************************************************************

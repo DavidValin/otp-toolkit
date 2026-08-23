@@ -39,7 +39,7 @@ if [ ! -x bin/otp ] && [ ! -f bin/otp.exe ]; then
   exit 1
 fi
 
-TESTS="otp keychain commit lock metadata msgmeta confirm lastcopy truncate status recoverlast randvault vaultkeypair reporthtml"
+TESTS="otp xor keychain commit lock metadata msgmeta confirm lastcopy truncate status recoverlast randvault vaultkeypair reporthtml"
 ESC_CHAR=$(printf '\033')
 REPO_URL="https://github.com/DavidValin/otp"
 
