@@ -90,6 +90,30 @@ int keychain_status(const char *contact_name, int porcelain);
 #define KEYCHAIN_RECOVER_NO_COPY 2
 int keychain_recover_last(const char *contact_name, int sent, FILE *output);
 
+// --with-ack-file: write the message's source_id, as lowercase hex, to
+// <contact>_<seq>_ack_ref.sent.txt (encrypt) or
+// <contact>_<seq>_ack.received.txt (decrypt) in the working directory,
+// and explain on stderr what the value is for.
+//
+// The source_id is the 16-byte chunk at the head of the message's key
+// range. It is spent with that range but never used as pad (see the
+// "Per-message metadata layer" comment in cipher.c), so disclosing it
+// afterwards reveals nothing that protected the plaintext, while only a
+// holder of the mirrored key at that exact offset could produce it -
+// which is what makes it usable as a delivery reference between two
+// correspondents who have agreed to acknowledge this way.
+//
+// The file is written, verified and published BEFORE any key material is
+// spent, and a failure to write aborts the operation with nothing
+// consumed: a message must never cost key bytes whose reference could
+// not be recorded, because once the range is destroyed the source_id
+// cannot be recomputed from anything that remains. The value depends
+// only on the key file and the current offset, not on the message, so a
+// run that is interrupted (or cancelled at the confirmation prompt)
+// after publishing the file leaves a reference the retry recomputes
+// identically - see cipher.c.
+void cipher_set_ack_file(int yes);
+
 // Delete the kept last-payload safety copies for a contact
 // (<keychain_dir>/<contact>.last_sent and .last_received). Used when a
 // contact is removed: removing it must take every trace of message

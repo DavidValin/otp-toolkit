@@ -1,6 +1,6 @@
 /*****************************************************************************\
  *                                                                            *
- *   otp-toolkit v1.6.0                                                       *
+ *   otp-toolkit v1.7.0                                                       *
  *                                                                            *
  *    simple but effective one time pad encryption / decryption command       *
  *    that works with stdin/stdout, managing contacts and key material        *
@@ -370,6 +370,8 @@ int main(int argc, char *argv[])
          "Show contact details"},
         {"-y (or --assume-delivered)",
          "Skip the delivery-confirmation prompt. Each direction's messages must be processed in the exact order sent, complete, exactly once; the per-message metadata rejects violations at decrypt time before any key is spent, but only the correspondents can confirm, out of band, that a delivered message actually reached its reader - so before spending key on any message after the first, otp asks on the terminal whether the previous message arrived intact, and cancels (keys untouched) unless answered yes. Pass -y (or set OTP_ASSUME_DELIVERED=1) after confirming out of band - required when no terminal is available."},
+        {"--with-ack-file",
+         "Optional, alongside -c <name> --encrypt or --decrypt. Writes that message's source_id, in lowercase hex, to <contact>_<seq>_ack_ref.sent.txt on encrypt or <contact>_<seq>_ack.received.txt on decrypt, and prints on stderr what to do with it. The source_id is the 16-byte chunk at the head of the message's key range: spent with that range but never used as pad, so it can be disclosed after the fact without revealing anything that protected the plaintext, while only a holder of the mirrored key at that exact offset could produce it. The recipient sends their value back in the clear; a sender whose file matches knows that exact message was decrypted. The file is published before any key is spent - a reference that cannot be written aborts the operation with nothing consumed, since the source_id cannot be recovered once its key range is destroyed. It confirms decryption, not that a human read it, and it is not a receipt provable to a third party - the sender knows the value too. Both correspondents must agree to acknowledge this way; nothing in the protocol requires it."},
         {"--status <name> [--porcelain] (or -st)",
          "Report a contact's per-direction state, verified from the disk files themselves (the key file's physical size is the authority, never the metadata alone): messages sent/received, key bytes remaining, metadata consistency, whether an interrupted run left a committed message the next operation will redeliver instead of processing new input, and whether the last sent/received message still awaits delivery confirmation. --porcelain prints stable key=value lines for scripts. Strictly read-only. Exit codes: 0 clean and ready, 4 redelivery pending, 5 delivery confirmation outstanding, 6 key material rolled back (re-key the contact), 1 error."},
         {"--recover-last <name> --sent|--received (or -rl)",
@@ -390,9 +392,9 @@ int main(int argc, char *argv[])
      * Piped output gets the plain line instead. */
     printf("\n\n");
     if (otp_stdout_is_tty())
-      printf("%s otp-toolkit v1.6.0 - One Time Pad toolkit %s\n", OTP_BLACK_ON_WHITE, OTP_RESET);
+      printf("%s otp-toolkit v1.7.0 - One Time Pad toolkit %s\n", OTP_BLACK_ON_WHITE, OTP_RESET);
     else
-      puts("otp-toolkit v1.6.0 - One Time Pad toolkit");
+      puts("otp-toolkit v1.7.0 - One Time Pad toolkit");
     otp_print_wrapped("\nEncrypt and decrypt messages with the one-time pad, the only cipher with proven perfect secrecy. Messages stream from stdin to stdout; the key material lives in a keychain of contacts, each holding one pad per direction. Every operation consumes its key bytes and physically destroys them - crash-safely, so no key range can ever cover two messages, even across interrupted runs.\n\nUses:");
     /* Each use is a heading, the shell line itself, and an optional
      * note. Only the shell line is colored; it goes through the same
@@ -727,6 +729,13 @@ int main(int argc, char *argv[])
          * delivery-confirmation prompt is skipped. Required for scripts:
          * with no terminal to ask on, the gate fails closed. */
         keychain_set_assume_delivered(1);
+      }
+      else if (strcmp(argv[i], "--with-ack-file") == 0)
+      {
+        /* Handled inside cipher.c: the reference has to be published
+         * before any key is spent, which is a point only the operation
+         * itself can act on. */
+        cipher_set_ack_file(1);
       }
     }
 

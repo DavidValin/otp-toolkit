@@ -1,6 +1,6 @@
 # OTP manual page
 
-.TH OTP 1 "2026-08-23" "otp-toolkit v1.6.0" "User Commands"
+.TH OTP 1 "2026-08-23" "otp-toolkit v1.7.0" "User Commands"
 
 .SH NAME
 otp \- simple one-time pad encryption/decryption utility
@@ -28,10 +28,10 @@ otp \- simple one-time pad encryption/decryption utility
 [-sc | --show-contact] <contact_name>
 .br
 .B otp
-[-c | --contact] <contact_name> --encrypt
+[-c | --contact] <contact_name> --encrypt [--with-ack-file]
 .br
 .B otp
-[-c | --contact] <contact_name> --decrypt
+[-c | --contact] <contact_name> --decrypt [--with-ack-file]
 .br
 .B otp
 [-st | --status] <contact_name> [--porcelain]
@@ -88,6 +88,10 @@ Decrypt data from stdin using the contact's decryption key and write the plain t
 .TP
 .B \-y, \-\-assume-delivered
 Skip the delivery-confirmation prompt when encrypting or decrypting with a contact.  Each direction's messages must be processed in the exact order they were sent, complete, exactly once; the per-message metadata layer rejects violations at decrypt time before any key is spent, but only the correspondents can confirm, out of band, that a delivered message actually reached its reader, so before spending key on any message after a direction's first, otp asks on the terminal (never on stdin, which carries the message itself) whether the previous message arrived and decoded correctly, and cancels with the keys untouched unless answered yes.  Pass this flag (or set the OTP_ASSUME_DELIVERED environment variable to 1) once delivery has been confirmed out of band; scripts must do so explicitly, because with no terminal available the operation fails closed rather than assuming delivery.
+
+.TP
+.B \-\-with-ack-file
+Optional, alongside \fB-c <contact_name> --encrypt\fP or \fB--decrypt\fP.  Write that message's source_id, as 32 lowercase hex characters followed by a newline, to \fB<contact_name>_<seq>_ack_ref.sent.txt\fP on encrypt or \fB<contact_name>_<seq>_ack.received.txt\fP on decrypt, in the working directory, and print on standard error what the value is for.  The source_id is the 16-byte chunk at the head of the message's key range (see ORIGIN AND ORDER VERIFICATION): it is spent with that range but never used as pad, so disclosing it after the fact reveals nothing that protected the plaintext, while only a holder of the mirrored key at that exact offset could ever produce it.  That is what makes it usable as a delivery reference - the recipient decrypts with this flag and sends their value back in the clear; a sender whose file matches knows that exact message was decrypted by the holder of the mirror key.  It confirms decryption, not that a human read the message, and it is not a receipt provable to a third party, since the sender knows the value too.  Both correspondents must agree to acknowledge this way; nothing in the protocol requires or enforces it.  The file is written, verified and atomically published \fBbefore\fP any key material is spent, and a failure to write aborts the operation with nothing consumed - no ciphertext, no key spent, non-zero exit.  This ordering is not incidental: the source_id lives only in the key range the message is about to destroy, so a run that spent the key and then failed to record the reference would leave it unrecoverable, neither in the truncated key file nor in the ciphertext, whose metadata is sealed under pad bytes from that same range.  Writing first is safe because the value depends only on the key file and the current offset, never on the message: a run interrupted, or cancelled at the delivery-confirmation prompt, after the file is published spends nothing, and the retry republishes a byte-identical file.  A run that redelivers an earlier message (exit 8) writes no new reference and names the file the interrupted run had already published.
 
 .TP
 .B \-st, \-\-status <contact_name> [\-\-porcelain]

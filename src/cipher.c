@@ -443,6 +443,100 @@ static size_t meta_build(unsigned char *buf, const unsigned char *source_id,
   return pos;
 }
 
+/* --with-ack-file, opted in per invocation by the CLI. */
+static int g_want_ack_file;
+
+void cipher_set_ack_file(int yes)
+{
+  g_want_ack_file = yes;
+}
+
+/* Write this message's source_id out as the delivery reference the two
+ * correspondents compare - see cipher.h for what the value proves.
+ *
+ * Called BEFORE any key material is spent, and a non-zero return aborts
+ * the operation with nothing consumed. The ordering is deliberate: the
+ * source_id lives only in the key range the message is about to destroy,
+ * so a run that spent the key and then failed to record the reference
+ * would leave it unrecoverable - not from the truncated key file, and
+ * not from the ciphertext, whose metadata is sealed under pad bytes from
+ * that same destroyed range.
+ *
+ * Writing first is safe because the value is a function of the key file
+ * and the current offset, never of the message: an operation that is
+ * interrupted, or cancelled at the delivery-confirmation prompt, after
+ * this file is published spends nothing, and the retry reads the same 16
+ * bytes at the same offset with the same sequence number and republishes
+ * a byte-identical file. The published file is therefore always either
+ * this message's reference or the reference of the message that will
+ * take its place.
+ *
+ * The write itself goes through the same stage/verify/publish primitive
+ * every other artifact here uses, so the file at its final name is never
+ * a partial one: it is written to a .tmp beside it, fsynced, read back
+ * and compared, then atomically renamed into place. */
+static int write_ack_ref(const char *contact_name, int sent,
+                         const unsigned char *source_id, size_t sequence,
+                         char *final_path, size_t final_path_size)
+{
+  char tmp_path[620];
+  snprintf(final_path, final_path_size, "%s_%zu_%s", contact_name, sequence,
+           sent ? "ack_ref.sent.txt" : "ack.received.txt");
+  snprintf(tmp_path, sizeof tmp_path, "%s.tmp", final_path);
+
+  unsigned char hex[2 * META_SOURCE_LEN + 1];
+  for (size_t i = 0; i < META_SOURCE_LEN; i++)
+  {
+    static const char digits[] = "0123456789abcdef";
+    hex[2 * i] = (unsigned char)digits[source_id[i] >> 4];
+    hex[2 * i + 1] = (unsigned char)digits[source_id[i] & 0x0f];
+  }
+  hex[2 * META_SOURCE_LEN] = '\n';
+
+  if (commit_write_verified(tmp_path, hex, sizeof hex) != 0 ||
+      commit_publish(tmp_path, final_path) != 0)
+  {
+    commit_discard_path(tmp_path);
+    fprintf(stderr,
+            "Error: could not write the ack reference to '%s'; aborting before any "
+            "key material is spent (the source_id could not be recovered afterwards)\n",
+            final_path);
+    return -1;
+  }
+
+  commit_test_crash_point("after_ack_publish");
+  return 0;
+}
+
+/* The guidance for a reference write_ack_ref() published earlier in the
+ * same operation. Printed only once the message has actually been
+ * delivered, after the key-usage summary, so the operator reads it as
+ * "what to do now" rather than before the ciphertext has even appeared
+ * - an operation that fails or is cancelled after the file exists prints
+ * nothing here, and the retry (which republishes the same file) does. */
+static void report_ack_ref(const char *contact_name, int sent,
+                           const char *final_path, size_t sequence)
+{
+  int err_tty = keychain_stderr_is_tty();
+  const char *hl = err_tty ? KEYCHAIN_YELLOW : "";
+  const char *rs = err_tty ? KEYCHAIN_RESET : "";
+  fprintf(stderr, "%sAck reference written to %s%s\n", hl, final_path, rs);
+  if (sent)
+    fprintf(stderr,
+            "%sIt holds the source_id sealed under the pad of message #%zu. Ask %s to "
+            "decrypt with --with-ack-file and send you their value in the clear: if it "
+            "matches this file, they decrypted this exact message. Disclosing it is safe "
+            "- the source_id is spent key material that never served as pad. Both sides "
+            "must have agreed to acknowledge this way.%s\n",
+            hl, sequence, contact_name, rs);
+  else
+    fprintf(stderr,
+            "%sSend its contents to %s in the clear to confirm you decrypted message "
+            "#%zu; they compare it against the reference their encrypt wrote. Both sides "
+            "must have agreed to acknowledge this way.%s\n",
+            hl, contact_name, sequence, rs);
+}
+
 typedef struct
 {
   unsigned char source_id[META_SOURCE_LEN];
@@ -1017,6 +1111,13 @@ static int encrypt_with_contact_locked(Contact *c, const char *contact_name,
       return -1;
     }
     keep_last_copy(keychain_dir, contact_name, 1, rec.pending_path);
+    if (g_want_ack_file)
+      fprintf(stderr,
+              "No new ack reference: message #%zu was produced by the interrupted run, "
+              "which published '%s_%zu_ack_ref.sent.txt' before spending any key if it "
+              "was invoked with --with-ack-file. That file is this message's reference; "
+              "if it is absent the source_id can no longer be recovered.\n",
+              rec.sequence, contact_name, rec.sequence);
     return KEYCHAIN_REDELIVERED;
   }
 
@@ -1076,6 +1177,17 @@ static int encrypt_with_contact_locked(Contact *c, const char *contact_name,
     fclose(keyfile);
     return -1;
   }
+  /* Nothing has been spent, staged or delivered yet - the earliest point
+   * at which this message's reference is known, and therefore where a
+   * failure to record it must stop the operation. */
+  char ack_path[600] = {0};
+  if (g_want_ack_file &&
+      write_ack_ref(contact_name, 1, source_id, new_sequence, ack_path, sizeof ack_path) != 0)
+  {
+    fclose(keyfile);
+    return -1;
+  }
+
   size_t meta_len = meta_build(meta_plain, source_id, new_sequence, range_offset);
   // Reserved key bytes that are spent per message on top of the payload
   // pad: the source_id chunk plus the metadata's own pad.
@@ -1307,6 +1419,8 @@ static int encrypt_with_contact_locked(Contact *c, const char *contact_name,
             err_tty ? KEYCHAIN_GREEN : "", c->EncryptionKeySize,
             err_tty ? KEYCHAIN_RESET : "");
   }
+  if (ack_path[0])
+    report_ack_ref(contact_name, 1, ack_path, new_sequence);
 
   return 0;
 }
@@ -1432,6 +1546,13 @@ static int decrypt_with_contact_locked(Contact *c, const char *contact_name,
       return -1;
     }
     keep_last_copy(keychain_dir, contact_name, 0, rec.pending_path);
+    if (g_want_ack_file)
+      fprintf(stderr,
+              "No new ack reference: message #%zu was decrypted by the interrupted run, "
+              "which published '%s_%zu_ack.received.txt' before spending any key if it "
+              "was invoked with --with-ack-file. That file is this message's reference; "
+              "if it is absent the source_id can no longer be recovered.\n",
+              rec.sequence, contact_name, rec.sequence);
     return KEYCHAIN_REDELIVERED;
   }
 
@@ -1533,6 +1654,16 @@ static int decrypt_with_contact_locked(Contact *c, const char *contact_name,
             fail_red, fail_rst);
     fclose(keyfile);
     return meta_validation_code(bad_source, bad_seq, bad_offset);
+  }
+
+  /* Validation has passed and nothing has been spent yet: record the
+   * reference before the key range that carries it is destroyed. */
+  char ack_path[600] = {0};
+  if (g_want_ack_file &&
+      write_ack_ref(contact_name, 0, meta.source_id, new_sequence, ack_path, sizeof ack_path) != 0)
+  {
+    fclose(keyfile);
+    return -1;
   }
 
   // Key bytes spent per message on top of the payload pad: the source_id
@@ -1743,6 +1874,8 @@ static int decrypt_with_contact_locked(Contact *c, const char *contact_name,
             rep_tty ? KEYCHAIN_GREEN : "", c->DecryptionKeySize,
             rep_tty ? KEYCHAIN_RESET : "");
   }
+  if (ack_path[0])
+    report_ack_ref(contact_name, 0, ack_path, new_sequence);
 
   return 0;
 }

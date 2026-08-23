@@ -117,7 +117,7 @@ test-arm32: arm32
 	printf '#!/bin/sh\nexec %s "$$(dirname "$$0")/otp.target" "$$@"\n' "$$QEMU" > bin/otp; \
 	chmod +x bin/otp; \
 	rc=0; \
-	for t in otp xor keychain commit lock metadata msgmeta confirm truncate; do \
+	for t in otp xor keychain commit lock metadata msgmeta confirm ackfile truncate; do \
 	  bash test/$$t.test.sh || rc=1; \
 	done; \
 	mv bin/otp.target bin/otp; \
@@ -132,7 +132,7 @@ test-riscv64: riscv64
 	printf '#!/bin/sh\nexec %s "$$(dirname "$$0")/otp.target" "$$@"\n' "$$QEMU" > bin/otp; \
 	chmod +x bin/otp; \
 	rc=0; \
-	for t in otp xor keychain commit lock metadata msgmeta confirm truncate; do \
+	for t in otp xor keychain commit lock metadata msgmeta confirm ackfile truncate; do \
 	  bash test/$$t.test.sh || rc=1; \
 	done; \
 	mv bin/otp.target bin/otp; \

@@ -18,6 +18,7 @@ When using the one time pad algorithm, it is critical to remember to never reuse
 - **Automatic recovery from a mid-operation crash:** the next call on a contact reconciles any leftover pending artifact against the key file and metadata via a deterministic truth table - never a guess - before doing anything else - see [Recovering from a crash](#recovering-from-a-crash).
 - **Recovery of the last message when delivery isn't acknowledged:** the exact bytes last sent or received are kept in `.last_sent`/`.last_received` until the next confirmed operation, and can be re-emitted at any time with `--recover-last` - see [`--recover-last`: re-emitting the kept safety copies](#--recover-last-re-emitting-the-kept-safety-copies).
 - **Origin and order verification:** every decrypt proves, before a single key byte is spent, that the message really comes from this contact's mirrored key and is exactly the next one expected - replayed, reordered, foreign or corrupted messages are rejected with a distinct exit code per failure combination and the keys untouched. Achieved through an encrypted per-message metadata block: each ciphertext opens with a `source_id` (a 128-bit chunk of the key itself, which only the true correspondent can possess), the message's sequence number and its key offset, and decryption validates all three against its own key state - see [Origin and order verification](#origin-and-order-verification).
+- **Optional delivery acknowledgement:** `--with-ack-file` writes the message's `source_id` to `<contact>_<seq>_ack_ref.sent.txt` on encrypt and `<contact>_<seq>_ack.received.txt` on decrypt; the recipient sends that value back in the clear and a matching file proves that exact message was decrypted. Safe to disclose - the `source_id` is spent key material that never served as pad - see [Acknowledging delivery with `--with-ack-file`](#acknowledging-delivery-with---with-ack-file).
 - **Randomness vault:** `--add-rand-to-vault <size_in_MB>` stores a sequential randomness stream at `.keychain/_randomness` - created (mode 0600) on first use, appended to on every call after, not tied to any contact.
 
 ## Index
@@ -32,6 +33,8 @@ When using the one time pad algorithm, it is critical to remember to never reuse
   - [Stages of one encrypt/decrypt operation](#stages-of-one-encryptdecrypt-operation)
 - [One Time Pad algorithm requirements](#one-time-pad-algorithm-requirements)
 - [Origin and order verification](#origin-and-order-verification)
+  - [Validation on decrypt](#validation-on-decrypt)
+  - [Acknowledging delivery with `--with-ack-file`](#acknowledging-delivery-with---with-ack-file)
 - [Accidental mid-crash protection](#accidental-mid-crash-protection)
   - [One Time Pad encryption](#one-time-pad-encryption)
   - [One Time Pad decryption](#one-time-pad-decryption)
@@ -347,6 +350,42 @@ A message that fails any check is rejected: the failure reasons are printed to `
 A message whose metadata cannot even be parsed verifies nothing and is rejected with exit `5`: garbage, a truncated fragment, ciphertext from an incompatible or pre-metadata sender, an empty message, and input that fails with a read error before the metadata is complete all land here - fewer bytes than a metadata block means there is nothing to verify, so nothing is ever decrypted blindly. Note that exit `1` is shared with generic errors, and a crash-recovery redelivery exits `8`.
 
 On success the metadata is stripped: the delivered plaintext is byte-for-byte the original message.
+
+### Acknowledging delivery with `--with-ack-file`
+
+The validation above proves a message is authentic and in order *to the receiver*. It tells the sender nothing - only the correspondents, out of band, can establish that a delivered message actually arrived, which is why every operation after a direction's first is gated on a confirmation the operator gives (see [One Time Pad algorithm requirements](#one-time-pad-algorithm-requirements)). `--with-ack-file` gives that confirmation something concrete to carry: a value only the true recipient can produce.
+
+Pass it alongside `-c <contact> --encrypt` or `--decrypt` and the message's **source_id** is written out as 32 lowercase hex characters:
+
+| Direction | File | Content |
+|-----------|------|---------|
+| `--encrypt` | `<contact>_<seq>_ack_ref.sent.txt` | the source_id the sender sealed into the message |
+| `--decrypt` | `<contact>_<seq>_ack.received.txt` | the same source_id, recovered from the ciphertext |
+
+The recipient sends that value back **in the clear**, over any channel; the sender compares it with the file their encrypt wrote. A match means that exact message was decrypted by a holder of the mirrored key at that exact offset:
+
+```
+# Alice sends, keeping the reference
+echo "meet at nine" | otp -c bob --encrypt --with-ack-file > message1.bin
+cat bob_1_ack_ref.sent.txt          # 6f0d…  the reference to compare against
+
+# Bob decrypts and reads out his copy
+cat message1.bin | otp -c alice --decrypt --with-ack-file
+cat alice_1_ack.received.txt        # 6f0d…  sends this back to Alice
+
+# Alice: the values match -> message #1 was decrypted. She can now
+# answer the delivery-confirmation prompt, or pass -y, for message #2.
+```
+
+**Why disclosing it is safe.** The source_id is the 16-byte chunk at `[off, off+16)`, the head of the message's key range - and it is [never used as pad](#origin-and-order-verification): the XOR pad starts at `off+16`. Publishing it therefore reveals no key byte that ever covered plaintext. An eavesdropper holding both the ciphertext and the acknowledgement recovers only the pad bytes that encrypted the source_id field itself, which cover nothing else and are destroyed with the rest of the range. And a leaked value cannot forge a later message: every message's source_id sits at its own offset, offsets only advance, and a replay fails the `seq` check regardless.
+
+**What it does and does not prove.** It confirms *decryption*, not that a human read the message. It is not a receipt provable to a third party - the sender knows the value too, so it establishes delivery between two parties who already trust their channel, not evidence against a dishonest one. Both correspondents must agree to acknowledge this way; nothing in the protocol requires or enforces it, and the flag is entirely optional.
+
+**The reference is written before any key is spent.** The source_id lives only in the key range the message is about to destroy: not in the truncated key file afterwards, and not recoverable from the ciphertext, whose metadata is sealed under pad bytes from that same range. A run that spent the key and *then* failed to record the reference would lose it permanently. So the file is written, verified and atomically published first, and **a failure to write aborts the operation with nothing consumed** - no ciphertext, no key spent, non-zero exit.
+
+Writing first is safe because the value is a function of the key file and the current offset, never of the message. An operation interrupted (or cancelled at the confirmation prompt) after the file is published spends nothing, and the retry reads the same 16 bytes at the same offset with the same sequence number and republishes a byte-identical file. The published file is therefore always either this message's reference or the reference of the message that takes its place. The write itself uses the same stage/verify/publish primitive as every other artifact (see [Crash-safe key consumption](#crash-safe-key-consumption)), so the file at its final name is never a partial one.
+
+**Mechanics.** The files land in the working directory. A run that redelivers an earlier message (exit `8`) writes no new reference and says so, naming the file the interrupted run had already published before it spent any key.
 
 
 ## Accidental mid-crash protection
