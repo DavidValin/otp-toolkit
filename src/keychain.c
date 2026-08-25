@@ -1382,17 +1382,24 @@ static void warn_if_name_previously_used(const char *keychain_dir, const char *n
 }
 
 // Build path for contact's key file
-static void build_key_path(const char *contact_name, const char *key_type,
-                           char *path, size_t path_size)
+// Returns 0 on success, -1 if the keychain directory could not be
+// determined (get_keychain_dir() failed) - in which case `path` is left
+// untouched rather than built from whatever partial/default value
+// get_keychain_dir() may have written to its own buffer, so a caller that
+// checked the return value can never mistake it for a real path.
+static int build_key_path(const char *contact_name, const char *key_type,
+                          char *path, size_t path_size)
 {
   char dir[512];
-  get_keychain_dir(dir, sizeof(dir));
+  if (get_keychain_dir(dir, sizeof(dir)) != 0)
+    return -1;
   int written = snprintf(path, path_size, "%s" PATH_SEPARATOR_STR "%s_%s.key", dir, contact_name, key_type);
   // Ensure null termination if truncated
   if (written >= (int)path_size)
   {
     path[path_size - 1] = '\0';
   }
+  return 0;
 }
 
 // A contact's name is not just a label: it is used verbatim to build the
@@ -2166,8 +2173,12 @@ static int add_contact_with_keys_locked(const char *name, const char *encryption
 
   // Build destination paths
   char enc_dest[512], dec_dest[512];
-  build_key_path(name, "enc", enc_dest, sizeof(enc_dest));
-  build_key_path(name, "dec", dec_dest, sizeof(dec_dest));
+  if (build_key_path(name, "enc", enc_dest, sizeof(enc_dest)) != 0 ||
+      build_key_path(name, "dec", dec_dest, sizeof(dec_dest)) != 0)
+  {
+    fprintf(stderr, "Error: Cannot determine keychain directory\n");
+    return -1;
+  }
 
   // Copy both key files into the keychain, 0600 and fsynced
   if (copy_key_file(encryption_key_file, enc_dest) != 0)

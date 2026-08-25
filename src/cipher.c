@@ -210,7 +210,16 @@ static int answer_is_yes(char *answer)
 
 // Stream the kept copy to a caller-chosen destination file. The
 // destination is created fresh (O_EXCL, 0600): recovery must never
-// silently overwrite an existing file the user pointed at by mistake.
+// silently overwrite an existing file the user pointed at by mistake -
+// which also rules out the usual stage-to-a-tmp-then-atomically-rename
+// primitive here, since publishing that way always replaces whatever is
+// at the final name. Instead, once the copy is written and fsynced, both
+// files are reopened and compared byte-for-byte before success is
+// reported: a successful fwrite()/fsync() only proves libc handed the
+// bytes to the kernel, not that what is now readable back at `dst`
+// actually matches `src` - the same read-back discipline every other
+// durable write in this codebase applies, adapted to a caller-chosen
+// destination this function cannot stage-and-publish into.
 static int recover_copy_to(const char *src, const char *dst)
 {
   FILE *in = fopen(src, "rb");
@@ -256,6 +265,35 @@ static int recover_copy_to(const char *src, const char *dst)
   if (failed)
   {
     fprintf(stderr, "Error: failed writing '%s': %s\n", dst, strerror(errno));
+    unlink(dst);
+    return -1;
+  }
+
+  // Read back and verify: reopen both files from scratch and compare
+  // every byte, rather than trusting the write path above.
+  FILE *rsrc = fopen(src, "rb");
+  FILE *rdst = fopen(dst, "rb");
+  int mismatch = !rsrc || !rdst;
+  unsigned char sbuf[65536], dbuf[65536];
+  while (!mismatch)
+  {
+    size_t sn = rsrc ? fread(sbuf, 1, sizeof(sbuf), rsrc) : 0;
+    size_t dn = rdst ? fread(dbuf, 1, sizeof(dbuf), rdst) : 0;
+    if (sn != dn || memcmp(sbuf, dbuf, sn) != 0 || ferror(rsrc) || ferror(rdst))
+    {
+      mismatch = 1;
+      break;
+    }
+    if (sn == 0)
+      break; // both at EOF, everything compared equal so far
+  }
+  if (rsrc)
+    fclose(rsrc);
+  if (rdst)
+    fclose(rdst);
+  if (mismatch)
+  {
+    fprintf(stderr, "Error: verification failed for '%s' (read-back does not match '%s')\n", dst, src);
     unlink(dst);
     return -1;
   }
@@ -2195,6 +2233,18 @@ int keychain_recover_last(const char *contact_name, int sent, FILE *output)
   unsigned long long src_size;
   if (otp_file_size(src, &src_size) != 0)
   {
+    // ENOENT is the only case that actually means "no copy exists". Any
+    // other stat() failure (permissions, a transient I/O error) means
+    // the copy's status is unknown, not that it is absent - reporting
+    // that as "nothing awaits delivery confirmation" would silently
+    // downgrade exactly the failure this safety copy exists to survive,
+    // so it fails closed instead of assuming clean.
+    if (errno != ENOENT)
+    {
+      fprintf(stderr, "Error: cannot stat kept copy '%s': %s\n", src, strerror(errno));
+      contact_lock_release(&lock);
+      return -1;
+    }
     fprintf(stderr,
             "No kept copy of the last %s for contact '%s' - nothing awaits "
             "delivery confirmation in that direction.\n",
