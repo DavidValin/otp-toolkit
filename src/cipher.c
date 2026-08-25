@@ -570,9 +570,24 @@ static int meta_next_byte(MetaReader *r, unsigned char *out)
   return 0;
 }
 
+// Upper bound on a parsed seq/offset value's declared byte length. Every
+// value this or any plausible build ever WRITES is at most 8 bytes
+// (64-bit counters); this leaves generous headroom for a hypothetical
+// build with much wider counters while still bounding how many bytes
+// meta_read_value() can ever be asked to stream for one field. Without a
+// cap here, a crafted length near 2^64 forces meta_read_value() into a
+// byte-at-a-time read loop bounded only by whichever of the ciphertext
+// stream or the decryption key file happens to run out first - on a
+// large key that is billions of iterations, spent while holding the
+// contact's exclusive lock, turning one malicious message into a
+// denial-of-service against every other operation on that contact. A
+// length beyond this is exactly as invalid as one beyond 2^64 bytes
+// (below): well-formed on the wire, but not a real message.
+#define META_MAX_VALUE_LEN 256
+
 // Read a ULEB128 length field. 0 on success, -1 malformed (zero length,
-// or a length so wide it cannot describe real bytes on any system),
-// -2 key ended.
+// or a length so wide it cannot describe real bytes on any system, or
+// wider than META_MAX_VALUE_LEN), -2 key ended.
 static int meta_read_varint_len(MetaReader *r, unsigned long long *len)
 {
   unsigned long long v = 0;
@@ -592,6 +607,8 @@ static int meta_read_varint_len(MetaReader *r, unsigned long long *len)
   }
   if (v == 0)
     return -1; // a value always takes at least one byte
+  if (v > META_MAX_VALUE_LEN)
+    return -1; // absurdly wide for any real seq/offset - reject without streaming it
   *len = v;
   return 0;
 }

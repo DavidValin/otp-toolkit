@@ -397,6 +397,31 @@ int vault_claim(size_t total_bytes, const char *part_a, const char *part_b,
     return -1;
   }
 
+  // Refuse if a pending claim for this exact (part_a, part_b) already
+  // exists. The caller (cli.c) checks this too, via vault_claim_recover(),
+  // but that check runs BEFORE the interactive delivery-confirmation
+  // prompt and without holding this lock - a human-timescale window in
+  // which a second concurrent run for the same pair could reach here
+  // first. Without this check, this call's commit_publish() below would
+  // silently overwrite that already-published, already-vault-charged
+  // artifact via its atomic rename, losing track of the first claim's
+  // randomness. This is the same check, but authoritative: taken right
+  // before publishing, under the lock that actually serializes concurrent
+  // claims.
+  struct stat pst;
+  if (stat(pending_path, &pst) == 0)
+  {
+    fprintf(stderr,
+            "Error: a pending vault claim for '%s'/'%s' already exists at '%s' - "
+            "another run may be in progress for this exact pair, or an earlier "
+            "interrupted run left it behind. Rerun --new-key-pair with the same size "
+            "and party names to deliver it, or remove the file yourself if the "
+            "randomness should be treated as lost.\n",
+            part_a, part_b, pending_path);
+    contact_lock_release(&lock);
+    return -1;
+  }
+
   // Re-check under the lock: the caller's earlier size check is only
   // advisory (a concurrent claim could have shrunk the vault meanwhile).
   struct stat vst;
@@ -706,13 +731,17 @@ int vault_claim_recover(const char *part_a, const char *part_b,
 // Copy a key file into the keychain directory, streaming so that a
 // terabyte-scale key is never held in RAM.
 //
-// The destination is *created* with mode 0600 rather than created under
-// the process umask (which typically yields 0644) and tightened
-// afterwards: one-time-pad key material is the entire secret here, and
-// creating it readable leaves a window - however brief - in which any
-// other local user can copy it. The copy is fsynced before it is
-// considered done, so a crash immediately after adding a contact cannot
-// leave a short key file behind metadata that claims the full length.
+// Staged via the same stage/verify/publish primitives (commit.c) used for
+// every other durable artifact this tool produces: the copy is written to
+// a tmp file - created with mode 0600 rather than created under the
+// process umask (which typically yields 0644) and tightened afterwards,
+// since one-time-pad key material is the entire secret here and creating
+// it readable leaves a window, however brief, in which any other local
+// user could copy it - fsynced, then read back and compared by checksum
+// before it is ever published to dst_path. A silent write failure
+// (fwrite() accepting bytes libc never actually persists) previously went
+// undetected here, unlike every other durable write in this codebase;
+// this closes that gap.
 static int copy_key_file(const char *src_path, const char *dst_path)
 {
   FILE *src = fopen(src_path, "rb");
@@ -722,19 +751,17 @@ static int copy_key_file(const char *src_path, const char *dst_path)
     return -1;
   }
 
-  int fd = open(dst_path, O_WRONLY | O_CREAT | O_TRUNC | O_BINARY_FLAG, 0600);
-  if (fd < 0)
+  char tmp_path[600];
+  if (snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", dst_path) >= (int)sizeof(tmp_path))
   {
-    fprintf(stderr, "Error: Cannot create key file '%s': %s\n", dst_path, strerror(errno));
+    fprintf(stderr, "Error: key file path too long for '%s'\n", dst_path);
     fclose(src);
     return -1;
   }
-  FILE *dst = fdopen(fd, "wb");
-  if (!dst)
+
+  CommitStage stage;
+  if (commit_stage_open(&stage, tmp_path) != 0)
   {
-    fprintf(stderr, "Error: Cannot write key file '%s': %s\n", dst_path, strerror(errno));
-    close(fd);
-    unlink(dst_path);
     fclose(src);
     return -1;
   }
@@ -743,27 +770,31 @@ static int copy_key_file(const char *src_path, const char *dst_path)
   size_t bytes;
   while ((bytes = fread(buffer, 1, sizeof(buffer), src)) > 0)
   {
-    if (fwrite(buffer, 1, bytes, dst) != bytes)
+    if (commit_stage_write(&stage, buffer, bytes) != 0)
     {
-      fprintf(stderr, "Error: Failed to write key file '%s': %s\n", dst_path, strerror(errno));
-      fclose(dst);
       fclose(src);
-      unlink(dst_path);
+      commit_stage_abort(&stage);
       return -1;
     }
   }
 
   int read_failed = ferror(src);
   fclose(src);
-
-  if (read_failed || fflush(dst) != 0 || otp_fsync(fileno(dst)) != 0)
+  if (read_failed)
   {
-    fprintf(stderr, "Error: Failed to store key file '%s': %s\n", dst_path, strerror(errno));
-    fclose(dst);
-    unlink(dst_path);
+    fprintf(stderr, "Error: Failed to read key file '%s': %s\n", src_path, strerror(errno));
+    commit_stage_abort(&stage);
     return -1;
   }
-  fclose(dst);
+
+  if (commit_stage_close_verified(&stage) != 0)
+    return -1;
+
+  if (commit_publish(stage.tmp_path, dst_path) != 0)
+  {
+    commit_discard_path(stage.tmp_path);
+    return -1;
+  }
   return 0;
 }
 
@@ -1377,7 +1408,12 @@ static void build_key_path(const char *contact_name, const char *key_type,
 // control characters, and '=' (which would corrupt the key=value .meta
 // format the name is stored in). Everything else - spaces, dots,
 // non-ASCII/UTF-8 names - is still allowed.
-static int is_valid_contact_name(const char *name)
+//
+// Not static: --new-key-pair's part_a/part_b names are built into paths
+// (<name>_keys/..., and the vault's pending-claim artifact inside
+// .keychain/) exactly the same way a contact's name is, so they need the
+// same protection - see the CLI's use of this function.
+int is_valid_contact_name(const char *name)
 {
   if (!name || name[0] == '\0')
     return 0;

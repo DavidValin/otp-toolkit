@@ -64,6 +64,14 @@ Contact *find_contact(const char *name);
 void init_keychain(void);
 void cleanup_keychain(void);
 
+// True if `name` is safe to build filenames/paths from (no path
+// separators, no "." or "..", no control characters, etc.) - see the
+// block comment above its definition in keychain.c. Used both for
+// contact names and for --new-key-pair's part_a/part_b, which are built
+// into paths (<name>_keys/..., the vault's pending-claim artifact) the
+// same way a contact's name is.
+int is_valid_contact_name(const char *name);
+
 // Shared with cipher.c, which owns encrypt_with_contact() /
 // decrypt_with_contact() (declared in cipher.h) but commits its key
 // consumption through the keychain's own primitives:
