@@ -2304,48 +2304,52 @@ int remove_contact(const char *name)
 
   // Hold the same per-contact lock encrypt/decrypt use, so a removal
   // can't race with an in-flight operation that's mid-way through
-  // reading or truncating this contact's key files.
+  // reading or truncating this contact's key files. This requires the
+  // keychain directory to resolve first - unlike a read-only query,
+  // removal is destructive, so a failure here must abort rather than
+  // fall back to proceeding unlocked against the `index` computed above:
+  // that index is from before any lock was held, and could already be
+  // stale (or the contact already gone) by the time it were used.
   char keychain_dir[512];
-  int have_dir = (get_keychain_dir(keychain_dir, sizeof(keychain_dir)) == 0);
+  if (get_keychain_dir(keychain_dir, sizeof(keychain_dir)) != 0)
+  {
+    fprintf(stderr, "Error: Cannot determine keychain directory\n");
+    return -1;
+  }
 
   ContactLock lock;
-  int locked = 0;
-  if (have_dir)
+  if (contact_lock_acquire(&lock, keychain_dir, name) != 0)
+    return -1;
+
+  // Reload from disk now that we hold the lock, and re-find the
+  // contact by name (not by the index computed before the wait) in
+  // case concurrent activity changed its position or removed it.
+  //
+  // A failed reload has to abort: load_keychain() empties the in-memory
+  // keychain before it can fail, so carrying on with the pre-reload
+  // `index` would read a zeroed contact and then decrement a count that
+  // is already 0 down to -1.
+  if (load_keychain() != 0)
   {
-    if (contact_lock_acquire(&lock, keychain_dir, name) != 0)
-      return -1;
-    locked = 1;
+    fprintf(stderr, "Error: Failed to reload keychain\n");
+    contact_lock_release(&lock);
+    return -1;
+  }
 
-    // Reload from disk now that we hold the lock, and re-find the
-    // contact by name (not by the index computed before the wait) in
-    // case concurrent activity changed its position or removed it.
-    //
-    // A failed reload has to abort: load_keychain() empties the in-memory
-    // keychain before it can fail, so carrying on with the pre-reload
-    // `index` would read a zeroed contact and then decrement a count that
-    // is already 0 down to -1.
-    if (load_keychain() != 0)
+  index = -1;
+  for (int i = 0; i < g_keychain.count; i++)
+  {
+    if (strcmp(g_keychain.contacts[i].Name, name) == 0)
     {
-      fprintf(stderr, "Error: Failed to reload keychain\n");
-      contact_lock_release(&lock);
-      return -1;
+      index = i;
+      break;
     }
-
-    index = -1;
-    for (int i = 0; i < g_keychain.count; i++)
-    {
-      if (strcmp(g_keychain.contacts[i].Name, name) == 0)
-      {
-        index = i;
-        break;
-      }
-    }
-    if (index == -1)
-    {
-      fprintf(stderr, "Error: Contact '%s' not found\n", name);
-      contact_lock_release(&lock);
-      return -1;
-    }
+  }
+  if (index == -1)
+  {
+    fprintf(stderr, "Error: Contact '%s' not found\n", name);
+    contact_lock_release(&lock);
+    return -1;
   }
 
   // Delete key files, and any staging sibling a crash mid-truncation may
@@ -2369,11 +2373,8 @@ int remove_contact(const char *name)
   // they don't linger in .keychain/ forever, and the kept last-payload
   // copies: removing a contact must take every trace of message content
   // with it (the empty .lock file below is the one deliberate exception).
-  if (have_dir)
-  {
-    commit_discard_all_pending(keychain_dir, name);
-    cipher_discard_last_copies(keychain_dir, name);
-  }
+  commit_discard_all_pending(keychain_dir, name);
+  cipher_discard_last_copies(keychain_dir, name);
 
   // Shift remaining contacts (in-memory bookkeeping only)
   for (int i = index; i < g_keychain.count - 1; i++)
@@ -2386,32 +2387,26 @@ int remove_contact(const char *name)
   // Each contact owns its own metadata file, so removing one is just
   // deleting that file - no other contact's file is ever touched.
   int result = 0;
-  if (have_dir)
+  char meta_path[600];
+  snprintf(meta_path, sizeof(meta_path), "%s%c%s.meta", keychain_dir, PATH_SEPARATOR, name);
+  if (unlink(meta_path) != 0 && errno != ENOENT)
   {
-    char meta_path[600];
-    snprintf(meta_path, sizeof(meta_path), "%s%c%s.meta", keychain_dir, PATH_SEPARATOR, name);
-    if (unlink(meta_path) != 0 && errno != ENOENT)
-    {
-      fprintf(stderr, "Error: Failed to remove metadata file %s: %s\n", meta_path, strerror(errno));
-      result = -1;
-    }
-
-    char meta_tmp[620];
-    snprintf(meta_tmp, sizeof(meta_tmp), "%s.tmp", meta_path);
-    unlink(meta_tmp);
+    fprintf(stderr, "Error: Failed to remove metadata file %s: %s\n", meta_path, strerror(errno));
+    result = -1;
   }
 
-  if (locked)
-  {
-    // The empty .lock file is deliberately left in place. Unlinking it
-    // would break mutual exclusion for anyone already blocked on it:
-    // flock() locks an *inode*, so a waiter holding the old, now-unlinked
-    // inode and a newcomer that creates a fresh file at the same path
-    // would each hold "the" lock simultaneously. That matters as soon as
-    // a contact is re-added under the same name. A zero-byte file is a
-    // very cheap price for not having to reason about that.
-    contact_lock_release(&lock);
-  }
+  char meta_tmp[620];
+  snprintf(meta_tmp, sizeof(meta_tmp), "%s.tmp", meta_path);
+  unlink(meta_tmp);
+
+  // The empty .lock file is deliberately left in place. Unlinking it
+  // would break mutual exclusion for anyone already blocked on it:
+  // flock() locks an *inode*, so a waiter holding the old, now-unlinked
+  // inode and a newcomer that creates a fresh file at the same path
+  // would each hold "the" lock simultaneously. That matters as soon as
+  // a contact is re-added under the same name. A zero-byte file is a
+  // very cheap price for not having to reason about that.
+  contact_lock_release(&lock);
 
   return result;
 }

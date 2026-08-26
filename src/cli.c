@@ -477,7 +477,8 @@ int main(int argc, char *argv[])
     {
       printf("  %s%s%s\n", hl, utils[i][0], rs);
       otp_print_wrapped_colored(utils[i][1], 4, warn_color);
-      otp_print_wrapped_indented(utils[i][2], 4);
+      if (utils[i][2])
+        otp_print_wrapped_indented(utils[i][2], 4);
     }
     otp_print_wrapped("\nSafety copies:\n  Each keychain encrypt/decrypt keeps an exact copy of its stdout payload at .keychain/<contact>.last_sent (ciphertext) or .keychain/<contact>.last_received (plaintext), so a forgotten redirect cannot lose a message whose key bytes are already destroyed. The copy is removed automatically (no manual cleanup needed) when the next operation in that direction confirms delivery; if delivery is rejected, otp offers to recover the copy to a file. --recover-last streams the copy at any time without consuming it.\n\nExternal integration:\n  Programs driving otp need no library: --status answers, from the disk files alone, everything a client must know before its next operation (is a crash-recovery redelivery pending? is the previous message still unconfirmed?), --recover-last re-emits the kept copy for re-transmission or re-delivery, and the -c exit codes report each operation's outcome: 0 processed, 8 redelivered, 1 error - and on --decrypt, the metadata validation codes 1 invalid source_id, 2 invalid seq, 3 invalid offset, 4 source_id+seq, 7 source_id+offset, 6 seq+offset, 5 all three (a rejected message consumes no key). Delivery confirmation stays with the integrating program: pass -y on the next operation once the peer acknowledged the previous message. See the \"External Integrations\" section of README.md for the full send/receive flow.\n");
     return 0;
