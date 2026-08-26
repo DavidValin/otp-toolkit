@@ -2019,7 +2019,22 @@ static int status_direction(const char *keychain_dir, Contact *c,
 
   last_copy_path(keychain_dir, c->Name, is_encrypt, out->copy_path, sizeof(out->copy_path));
   unsigned long long copy_size;
-  out->ack_outstanding = (otp_file_size(out->copy_path, &copy_size) == 0);
+  if (otp_file_size(out->copy_path, &copy_size) == 0)
+  {
+    out->ack_outstanding = 1;
+  }
+  else if (errno != ENOENT)
+  {
+    // Same distinction keychain_recover_last() makes: ENOENT is the only
+    // case that actually means "no copy exists". Any other stat()
+    // failure (permissions, a transient I/O error) means this direction's
+    // ack status is unknown, not clean - reporting it as "delivery
+    // confirmed" would silently downgrade exactly the failure this safety
+    // copy exists to survive, so --status fails closed instead.
+    fprintf(stderr, "Error: cannot stat kept copy '%s' for contact '%s': %s\n",
+            out->copy_path, c->Name, strerror(errno));
+    return -1;
+  }
 
   if (key_path[0] == '\0')
     return 0; // no key in this direction - nothing else to verify
