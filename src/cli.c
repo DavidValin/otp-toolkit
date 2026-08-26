@@ -1,6 +1,6 @@
 /*****************************************************************************\
  *                                                                            *
- *   otp-toolkit v1.7.0                                                       *
+ *   otp-toolkit v1.7.1                                                       *
  *                                                                            *
  *    simple but effective one time pad encryption / decryption command       *
  *    that works with stdin/stdout, managing contacts and key material        *
@@ -427,9 +427,9 @@ int main(int argc, char *argv[])
      * Piped output gets the plain line instead. */
     printf("\n\n");
     if (otp_stdout_is_tty())
-      printf("%s otp-toolkit v1.7.0 - One Time Pad toolkit %s\n", OTP_BLACK_ON_WHITE, OTP_RESET);
+      printf("%s otp-toolkit v1.7.1 - One Time Pad toolkit %s\n", OTP_BLACK_ON_WHITE, OTP_RESET);
     else
-      puts("otp-toolkit v1.7.0 - One Time Pad toolkit");
+      puts("otp-toolkit v1.7.1 - One Time Pad toolkit");
     otp_print_wrapped("\nEncrypt and decrypt messages with the one-time pad, the only cipher with proven perfect secrecy. Messages stream from stdin to stdout; the key material lives in a keychain of contacts, each holding one pad per direction. Every operation consumes its key bytes and physically destroys them - crash-safely, so no key range can ever cover two messages, even across interrupted runs.\n\nUses:");
     /* Each use is a heading, the shell line itself, and an optional
      * note. Only the shell line is colored; it goes through the same
