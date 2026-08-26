@@ -43,6 +43,15 @@ typedef struct
   char tmp_path[600];
 } CommitStage;
 
+/* Build the full path of a fresh staging file for `contact`/`direction`
+ * ("enc" or "dec") inside `keychain_dir`:
+ * <keychain_dir>/<contact>_<direction>_pending.<pid>.tmp - the one place
+ * that spells out this naming convention, so the writer (a caller about
+ * to commit_stage_open() it) and the reader (parse_stage_name(), used by
+ * commit_reconcile()/commit_classify()/commit_discard_all_pending() to
+ * recognize an abandoned staging file) can never drift apart. */
+void commit_stage_path(const char *keychain_dir, const char *contact,
+                       const char *direction, char *out, size_t out_size);
 int commit_stage_open(CommitStage *stage, const char *tmp_path);
 int commit_stage_write(CommitStage *stage, const unsigned char *data, size_t len);
 /* fsync + close + reopen + recompute CRC32 + compare. 0 on success (file

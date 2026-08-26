@@ -21,8 +21,10 @@
 
 #ifdef _WIN32
 #include <io.h>
+#include <process.h>
 #define O_BINARY_FLAG _O_BINARY
 #define unlink _unlink
+#define getpid _getpid
 #ifndef _MSC_VER
 /* Map the POSIX spellings this file uses onto the CRT's underscore names.
  * MSVC also exposes the POSIX names by default, but only as deprecated
@@ -387,6 +389,23 @@ static void build_pending_prefixes(const char *contact, const char *direction,
   snprintf(stage_prefix, stage_size, "%s_%s_pending.", contact, direction);
 }
 
+/* Build the full path of a fresh staging file for `contact`/`direction`:
+ * <keychain_dir>/<contact>_<direction>_pending.<pid>.tmp - the name a
+ * caller (encrypt/decrypt in cipher.c) creates via commit_stage_open()
+ * before its output is verified. Built from the exact same stage_prefix
+ * computation parse_stage_name() (via build_pending_prefixes() above)
+ * recognizes during crash recovery, rather than a second, independently
+ * spelled-out format string, so the writer and the reader of this name
+ * can never drift apart. */
+void commit_stage_path(const char *keychain_dir, const char *contact,
+                       const char *direction, char *out, size_t out_size)
+{
+  char artifact_prefix[300], stage_prefix[300];
+  build_pending_prefixes(contact, direction, artifact_prefix, sizeof(artifact_prefix),
+                         stage_prefix, sizeof(stage_prefix));
+  snprintf(out, out_size, "%s/%s%ld.tmp", keychain_dir, stage_prefix, (long)getpid());
+}
+
 /* The three-window recovery truth table (see README.md), as one pure
  * function of the sizes involved. Both commit_reconcile() - which acts on
  * the verdict - and commit_classify() - which only reports it - call this
@@ -485,6 +504,20 @@ int commit_reconcile(const char *keychain_dir, const char *contact,
   if (!found)
     return 0;
 
+  // Populate the found artifact's own fields before the stat below,
+  // which can fail and return BLOCKED - matching commit_classify(),
+  // which sets its equivalent fields before its own identical check.
+  // Both describe the very same on-disk artifact this early, before
+  // either has any reason to fail, so a BLOCKED caller (e.g. --status,
+  // via commit_classify(), or a future reconcile() caller that wants to
+  // report which artifact is stuck) always sees which one it is rather
+  // than a zeroed struct - the parity the shared classify_window() truth
+  // table is meant to guarantee.
+  out->sequence = found_seq;
+  out->range_offset = found_offset;
+  out->range_length = found_len;
+  snprintf(out->pending_path, sizeof(out->pending_path), "%s", found_path);
+
   unsigned long long key_size_64;
   if (otp_file_size(key_file_path, &key_size_64) != 0)
   {
@@ -516,11 +549,6 @@ int commit_reconcile(const char *keychain_dir, const char *contact,
     out->action = COMMIT_RECOVER_BLOCKED;
     return -1;
   }
-
-  out->sequence = found_seq;
-  out->range_offset = found_offset;
-  out->range_length = found_len;
-  snprintf(out->pending_path, sizeof(out->pending_path), "%s", found_path);
 
   out->action = classify_window(actual_key_size, declared_offset, declared_size,
                                 found_offset, found_len,

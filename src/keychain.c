@@ -2034,6 +2034,23 @@ static int add_contact_with_keys_locked(const char *name, const char *encryption
   for (int i = 0; i < g_keychain.count; i++)
   {
     Contact *other = &g_keychain.contacts[i];
+
+    // Hold `other`'s own lock for the whole comparison against it, the
+    // same lock its own encrypt/decrypt/remove would hold. Without this,
+    // reading its key files here races a concurrent operation that is
+    // truncating them (see truncate_key_file()): the size read above and
+    // the bytes key_files_overlap() streams afterwards could straddle
+    // that truncation's atomic rename, landing on a short read that (by
+    // design - see file_ranges_equal()) is reported as KEY_OVERLAP_UNKNOWN
+    // rather than silently missed, but still fails an otherwise-legitimate
+    // add with a spurious "could not compare" error. No deadlock: this
+    // process holds only its own new contact's lock plus, briefly, one
+    // other contact's at a time, and nothing anywhere else ever holds two
+    // contacts' locks at once or blocks on this one while holding it.
+    ContactLock other_lock;
+    if (contact_lock_acquire(&other_lock, keychain_dir, other->Name) != 0)
+      return -1;
+
     struct
     {
       const char *path;
@@ -2042,7 +2059,8 @@ static int add_contact_with_keys_locked(const char *name, const char *encryption
         {other->EncryptionKeyPath, "encryption"},
         {other->DecryptionKeyPath, "decryption"}};
 
-    for (int t = 0; t < 2; t++)
+    int failed = 0;
+    for (int t = 0; t < 2 && !failed; t++)
     {
       if (theirs[t].path[0] == '\0')
         continue;
@@ -2054,7 +2072,8 @@ static int add_contact_with_keys_locked(const char *name, const char *encryption
                 "with the new contact. Refusing to add rather than risk installing an "
                 "already-installed pad - resolve the failure and retry.\n",
                 other->Name, theirs[t].word);
-        return -1;
+        failed = 1;
+        break;
       }
       if (their_size == 0)
         continue; // fully consumed - nothing left to overlap with
@@ -2071,7 +2090,8 @@ static int add_contact_with_keys_locked(const char *name, const char *encryption
                 "key material with the new contact. Refusing to add rather than risk "
                 "installing an already-installed pad.\n",
                 other->Name, theirs[t].word);
-        return -1;
+        failed = 1;
+        break;
       }
 
       for (int cnd = 0; cnd < 2; cnd++)
@@ -2085,7 +2105,8 @@ static int add_contact_with_keys_locked(const char *name, const char *encryption
                   "shared key material. Refusing to add the contact rather than risk "
                   "installing one pad twice - resolve the failure and retry.\n",
                   cands[cnd].path, other->Name, theirs[t].word);
-          return -1;
+          failed = 1;
+          break;
         }
         if (cross == KEY_OVERLAP_NONE)
           continue;
@@ -2097,7 +2118,8 @@ static int add_contact_with_keys_locked(const char *name, const char *encryption
                   "different messages would share key bytes - a broken one-time pad. Every "
                   "contact needs key material no other contact holds.\n",
                   cands[cnd].path, other->Name, theirs[t].word);
-          return -1;
+          failed = 1;
+          break;
         }
         fprintf(stderr,
                 "Warning: '%s' matches contact '%s's %s key - this pair looks like the "
@@ -2107,6 +2129,10 @@ static int add_contact_with_keys_locked(const char *name, const char *encryption
                 cands[cnd].path, other->Name, theirs[t].word);
       }
     }
+
+    contact_lock_release(&other_lock);
+    if (failed)
+      return -1;
   }
 
   // Keys of *removed* contacts no longer exist to be compared against;

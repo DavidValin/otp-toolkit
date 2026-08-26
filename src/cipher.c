@@ -32,12 +32,10 @@
 // Platform-specific includes
 #ifdef _WIN32
 #include <io.h>
-#include <process.h>
 // Windows compatibility mappings - the same mapping keychain.c and
 // commit.c already make
 #define unlink(path) _unlink(path)
 #define PATH_SEPARATOR '\\'
-#define getpid _getpid
 #define O_BINARY_FLAG _O_BINARY
 #ifndef _MSC_VER
 #define fileno _fileno
@@ -1273,8 +1271,7 @@ static int encrypt_with_contact_locked(Contact *c, const char *contact_name,
   // consumption are only decided once the whole message has been
   // processed and verified.
   char stage_tmp_path[560];
-  snprintf(stage_tmp_path, sizeof(stage_tmp_path), "%s%c%s_enc_pending.%ld.tmp",
-           keychain_dir, PATH_SEPARATOR, contact_name, (long)getpid());
+  commit_stage_path(keychain_dir, contact_name, "enc", stage_tmp_path, sizeof(stage_tmp_path));
 
   CommitStage stage;
   if (commit_stage_open(&stage, stage_tmp_path) != 0)
@@ -1753,8 +1750,7 @@ static int decrypt_with_contact_locked(Contact *c, const char *contact_name,
   }
 
   char stage_tmp_path[560];
-  snprintf(stage_tmp_path, sizeof(stage_tmp_path), "%s%c%s_dec_pending.%ld.tmp",
-           keychain_dir, PATH_SEPARATOR, contact_name, (long)getpid());
+  commit_stage_path(keychain_dir, contact_name, "dec", stage_tmp_path, sizeof(stage_tmp_path));
 
   CommitStage stage;
   if (commit_stage_open(&stage, stage_tmp_path) != 0)
