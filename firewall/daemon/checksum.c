@@ -1,7 +1,15 @@
 #include "checksum.h"
 
 #include <string.h>
+/* htons()/htonl() live in <winsock2.h> on Windows (linking ws2_32.lib -
+ * standard for any Windows networking code) instead of POSIX's
+ * <arpa/inet.h>; identical signatures/semantics either way, so this is
+ * the only change this file needs to build for Windows too. */
+#ifdef _WIN32
+#include <winsock2.h>
+#else
 #include <arpa/inet.h>
+#endif
 
 /* Byte-shift accumulation (rather than reinterpreting the buffer as an
  * array of uint16_t) is deliberate: it gives the same result regardless

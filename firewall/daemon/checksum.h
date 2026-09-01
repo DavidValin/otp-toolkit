@@ -3,7 +3,16 @@
 
 #include <stddef.h>
 #include <stdint.h>
+/* struct in_addr/in6_addr themselves (not any function that needs
+ * WSAStartup() first - just the type definitions) come from
+ * <winsock2.h>/<ws2tcpip.h> on Windows instead of POSIX's
+ * <netinet/in.h>. */
+#ifdef _WIN32
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#else
 #include <netinet/in.h>
+#endif
 
 /* RFC 1071 one's-complement checksum over `len` bytes. `initial` lets
  * callers fold a pseudo-header sum in before the real header/data. */

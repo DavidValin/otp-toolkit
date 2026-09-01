@@ -6,7 +6,21 @@
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
+/* MinGW-w64's <fcntl.h>/<io.h> alias open()/write()/close()/O_CREAT etc.
+ * to the underlying _open()/_write()/_close() - this project's own
+ * Makefile already cross-compiles warning-free against MinGW-w64 (see
+ * `make mingw`, src/compat.h), so those calls below need no change.
+ * <unistd.h> itself doesn't exist on Windows, though. */
+#ifdef _WIN32
+#include <io.h>
+/* <unistd.h> (POSIX) implicitly brings in ssize_t via <sys/types.h>;
+ * <io.h> alone doesn't guarantee that on every MinGW-w64 version, and
+ * this file uses ssize_t below (append_line()'s `written`) - include it
+ * explicitly rather than relying on an unstated transitive include. */
+#include <sys/types.h>
+#else
 #include <unistd.h>
+#endif
 
 /* otp_fw_setup_keychain_dir() has already chdir()'d to ~/.otp by the
  * time this runs, so these are deliberately relative paths. */
@@ -38,7 +52,14 @@ static void append_line(const char *path, const char *direction, const char *con
 {
   time_t now = time(NULL);
   struct tm tm_utc;
+  /* gmtime_s() takes its arguments in the opposite order from POSIX
+   * gmtime_r() (destination first) - the only other platform difference
+   * this file has. */
+#ifdef _WIN32
+  gmtime_s(&tm_utc, &now);
+#else
   gmtime_r(&now, &tm_utc);
+#endif
   char ts[32];
   strftime(ts, sizeof(ts), "%Y-%m-%dT%H:%M:%SZ", &tm_utc);
 

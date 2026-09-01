@@ -1,12 +1,27 @@
 #include "config.h"
 
-#include <arpa/inet.h>
 #include <errno.h>
-#include <netdb.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+/* inet_pton()/inet_ntop()/getaddrinfo()/struct sockaddr_in{,6} all come
+ * from <ws2tcpip.h>/<winsock2.h> on Windows instead of POSIX's
+ * <arpa/inet.h>/<netdb.h>/<sys/socket.h> - same functions, same
+ * semantics, but Windows additionally requires WSAStartup() to have
+ * been called once before any of them are used (WSACleanup() on the way
+ * out); unlike everything else in this file, that's a real runtime
+ * requirement, not just a header swap - the Windows service's own
+ * startup (see ../windows-wfp-callout-driver/Service/) does it once,
+ * before touching config.c at all, rather than this file managing its
+ * own Winsock lifetime. */
+#ifdef _WIN32
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#else
+#include <arpa/inet.h>
+#include <netdb.h>
 #include <sys/socket.h>
+#endif
 
 void fwconfig_init(FwConfig *cfg)
 {

@@ -11,13 +11,18 @@
    - [How it works (macOS)](#how-it-works-macos)
    - [How to install/use it (macOS)](#how-to-installuse-it-macos)
    - [Technical details (macOS)](#technical-details-macos)
+4. Windows WFP Callout Driver
+   - [How it works (Windows)](#how-it-works-windows)
+   - [How to install/use it (Windows)](#how-to-installuse-it-windows)
+   - [Technical details (Windows)](#technical-details-windows)
 
 ## What is OTP Firewall
 
 OTP Firewall is a system-wide network firewall, built on top of
 otp-toolkit's one-time-pad keychain, available on **Linux**
-(`firewall/linux-kernel-module/` + `firewall/daemon/`) and **macOS**
-(`firewall/macos-kernel-module/`). Once active, it blocks all incoming and
+(`firewall/linux-kernel-module/` + `firewall/daemon/`), **macOS**
+(`firewall/macos-kernel-module/`), and **Windows**
+(`firewall/windows-wfp-callout-driver/`). Once active, it blocks all incoming and
 outgoing network traffic by default, and only allows traffic to and from the
 contacts in your keychain. There's no separate password, certificate, or
 shared secret to set up — the same one-time-pad keys you already use with the
@@ -33,24 +38,29 @@ In short:
   on) don't need to know anything changed. Traffic to and from your contacts
   keeps working normally; everything else is silently dropped.
 
-Both platforms share the same core logic — the same `cipher.c`/`keychain.c`/
-`commit.c` crypto library unmodified, and the same packet-parsing/config/pin/
-trial-ordering code in `firewall/daemon/` reused directly by both — with a
-thin, platform-specific layer on top doing the actual traffic interception
-(a kernel module on Linux, a System Extension on macOS). The sections below
-are split by platform because that interception layer — and therefore how you
+All three platforms share the same core logic — the same
+`cipher.c`/`keychain.c`/`commit.c` crypto library unmodified, and the same
+packet-parsing/config/pin/trial-ordering code in `firewall/daemon/` reused
+directly across all of them — with a thin, platform-specific layer on top
+doing the actual traffic interception (a kernel module on Linux, a System
+Extension on macOS, a WFP callout driver on Windows). The sections below are
+split by platform because that interception layer — and therefore how you
 install, run, and control it — genuinely differs between them; the underlying
 protocol behavior (what gets encrypted, how a packet is authenticated, what
-gets logged and why) is identical either way.
+gets logged and why) is identical across all three.
 
-**Maturity differs sharply between the two.** The Linux side has been built,
-compiled, and unit-tested (`firewall/linux-kernel-module/tests/`, 4,273
-checks) — though its kernel module specifically has still never been loaded
-on a real machine. The macOS side has never been compiled at all (written
-without access to Xcode or a macOS SDK) and carries real open architecture
-questions, not just unverified API calls — see
-["Technical details (macOS)"](#technical-details-macos) for specifics before
-relying on it for anything.
+**Maturity differs sharply across the three.** The Linux side has been
+built, compiled, and unit-tested (`firewall/linux-kernel-module/tests/`,
+4,273 checks) — though its kernel module specifically has still never been
+loaded on a real machine. The macOS side has never been compiled at all
+(written without access to Xcode or a macOS SDK) and carries real open
+architecture questions, not just unverified API calls — see ["Technical
+details (macOS)"](#technical-details-macos) for specifics. The Windows side
+has also never been compiled (no WDK/MSVC access) and, on top of that, its
+kernel↔userspace packet queue was designed from scratch with no existing
+mechanism to lean on the way Linux's module leans on NFQUEUE — see
+["Technical details (Windows)"](#technical-details-windows) before relying
+on any of the three for anything.
 
 ## How it works (Linux)
 
@@ -512,30 +522,30 @@ a careful, best-effort starting point, not a working deliverable.
 ### Architecture
 
 ```
-                         ┌────────────────────────────────────────┐
-                         │   OTPFirewallExtension  (System         │
-                         │   Extension, userspace)                 │
-                         │                                        │
-                         │  NEPacketTunnelProvider set as the      │
-                         │  default route - captures all outgoing  │
-                         │  traffic and (if reached at all - see   │
-                         │  the open question above) incoming      │
-                         │                                        │
-  outgoing packet ───────►  ICMPv6? ─ yes ──► pass through as-is  │
-                         │     │ no                                │
-                         │     ▼                                   │
-                         │  encrypt for the matched contact, or    │
-                         │  block if none is matched - then a raw  │
+                         ┌──────────────────────────────────────────┐
+                         │   OTPFirewallExtension  (System          │
+                         │   Extension, userspace)                  │
+                         │                                          │
+                         │  NEPacketTunnelProvider set as the       │
+                         │  default route - captures all outgoing   │
+                         │  traffic and (if reached at all - see    │
+                         │  the open question above) incoming       │
+                         │                                          │
+  outgoing packet ───────►  ICMPv6? ─ yes ──► pass through as-is    │
+                         │     │ no                                 │
+                         │     ▼                                    │
+                         │  encrypt for the matched contact, or     │
+                         │  block if none is matched - then a raw   │
                          │  IP socket puts it on the wire           │
-                         │                                        │
-  incoming packet ───────►  ICMPv6? ─ yes ──► pass through as-is  │
-                         │     │ no                                │
-                         │     ▼                                   │
-                         │  try to decrypt against your contacts'  │
-                         │  keys; on success, inject back into the │
+                         │                                          │
+  incoming packet ───────►  ICMPv6? ─ yes ──► pass through as-is    │
+                         │     │ no                                 │
+                         │     ▼                                    │
+                         │  try to decrypt against your contacts'   │
+                         │  keys; on success, inject back into the  │
                          │  local stack via packetFlow, otherwise   │
-                         │  block                                  │
-                         └────────────────────────────────────────┘
+                         │  block                                   │
+                         └──────────────────────────────────────────┘
 ```
 
 Unlike the Linux side, there is no separate fast-path prefilter ahead of this
@@ -605,3 +615,273 @@ Identical to [Linux](#log-format) — same line format, same `reason` values.
 - **No independent code review.** The Linux side has been through four
   rounds of independent review with real bugs found and fixed each time;
   the macOS port hasn't been reviewed at all yet.
+
+## How it works (Windows)
+
+The protocol itself — what's authenticated, what's encrypted, what gets
+logged and why — is identical to the [Linux version](#how-it-works-linux):
+same trial-decryption order (pinned contact → configured contact → the rest
+of the keychain), same "every packet checked individually" tradeoff, same
+key-consumption behavior, same IPv6 handling. Unlike macOS, the Windows port
+*does* have a genuine kernel-mode piece, the same shape as Linux's:
+
+- **A fast in-kernel prefilter, same as Linux.** A custom kernel driver
+  built on the Windows Filtering Platform (WFP) watches outgoing and
+  incoming IP packets at the packet layer and immediately drops anything
+  that obviously doesn't match a known contact, before it ever reaches
+  userspace — see ["Technical details (Windows)"](#technical-details-windows)
+  for why this is a real callout driver and not
+  [WinDivert](https://github.com/basil00/Divert) or the lighter-weight
+  ALE/connection-authorization layer.
+- **A kernel↔userspace packet queue, invented for this project.** Windows
+  has no NFQUEUE equivalent. Traffic that might be relevant is pended in the
+  kernel and handed to the background service over a custom device
+  (`\\.\OTPFirewall`), which is genuinely the least-proven piece of this
+  entire three-platform project — see ["Technical details
+  (Windows)"](#technical-details-windows) before relying on it.
+- **ICMPv6 (Neighbor Discovery) is exempted in the kernel driver itself**,
+  the same place it's exempted on Linux — never in userspace — so it always
+  passes through untouched and IPv6 keeps working.
+
+## How to install/use it (Windows)
+
+**This has never been built.** Written without access to the Windows Driver
+Kit (WDK), MSVC, or any Windows toolchain — see ["Technical details
+(Windows)"](#technical-details-windows) for exactly what is and isn't
+verified before following these steps.
+
+### 1. Build the driver
+
+Install the WDK matching your Visual Studio version and build
+`firewall/windows-wfp-callout-driver/Driver/` as a WDM driver project — no
+project file is included, same reasoning as the macOS port's missing
+`.xcodeproj`. See `firewall/windows-wfp-callout-driver/README.md` for the
+exact file list.
+
+### 2. Test-sign it — no Microsoft enrollment involved
+
+This project deliberately does not enroll in Microsoft's production
+driver-signing program (that needs an EV certificate and Hardware Dev
+Center attestation submission — out of scope here). Instead it uses
+Windows' own built-in test-signing mode, entirely self-service on your own
+machine:
+
+```
+bcdedit /set testsigning on          # as Administrator, then reboot
+```
+
+Secure Boot must also be disabled in your machine's UEFI firmware settings
+first — it blocks test-signed drivers regardless of this setting. Then
+create a self-signed certificate and sign the built `.sys` — the exact
+`New-SelfSignedCertificate`/`signtool sign` commands are in
+`firewall/windows-wfp-callout-driver/README.md`.
+
+### 3. Load the driver
+
+```
+sc create OTPFirewall type= kernel binPath= "C:\path\to\otp_firewall_driver.sys"
+sc start OTPFirewall
+```
+
+The driver starts **disabled** — nothing about your network changes yet.
+
+### 4. Set up your contacts and configuration
+
+Identical to Linux: same files, same format, same location, since
+`otp_fw_setup_keychain_dir()`/`config.c`/`log.c` need only small
+`_WIN32` guards, not logic changes. See steps 3–4 of ["How to install/use
+it (Linux)"](#how-to-installuse-it-linux) — `~/.otp/firewall_keychain/`,
+`~/.otp/firewall.config`, `cd ~/.otp && otp -ac ...` all work the same way.
+(`~/.otp` resolves via `%USERPROFILE%` when `$HOME` isn't set.) One
+Windows-specific wrinkle: creating the `.keychain` link needs either
+Administrator rights or Developer Mode enabled (Settings > Privacy &
+Security > For developers).
+
+### 5. Build and start the background service
+
+```
+sc create OTPFirewallSvc binPath= "C:\path\to\otp_firewall_svc.exe" start= demand
+sc start OTPFirewallSvc
+```
+
+### 6. Turn the firewall on
+
+Enforcement is a separate step from starting the driver and service, so you
+always have a fast way back if something looks wrong — the Windows
+equivalent of Linux's `/proc/otp_firewall/enabled`:
+
+```
+otpfwctl.exe status    # check current state
+otpfwctl.exe enable    # turn on
+otpfwctl.exe disable   # turn off instantly
+```
+
+Turning it off this way takes effect immediately and doesn't require
+stopping the service or unloading the driver.
+
+### 7. Removing it
+
+```
+otpfwctl.exe disable
+sc stop OTPFirewallSvc
+sc stop OTPFirewall
+sc delete OTPFirewallSvc
+sc delete OTPFirewall
+```
+
+Then, if you're done testing, revert test-signing mode
+(`bcdedit /set testsigning off`) and re-enable Secure Boot.
+
+## Technical details (Windows)
+
+### Why a custom callout driver, not WinDivert or ALE
+
+Two existing, more established alternatives were deliberately not used.
+[WinDivert](https://github.com/basil00/Divert) is a pre-built, pre-signed
+WFP-based packet capture library — using it would have meant the
+kernel-mode piece of this project wasn't actually this project's own code,
+unlike the Linux kernel module. The lighter-weight ALE layer
+(`FWPM_LAYER_ALE_AUTH_CONNECT_V4`) only supports connection-level
+allow/block decisions, not access to packet payloads — it can't do the
+OTP wrap/unwrap this firewall needs. So this is a genuine custom callout
+driver registered at the IP packet layer
+(`FWPM_LAYER_{OUTBOUND,INBOUND}_IPPACKET_V{4,6}`), the same category of
+thing as the Linux kernel module, just built on a different kernel
+packet-filtering framework.
+
+### What's verified and what isn't
+
+**Nothing in `firewall/windows-wfp-callout-driver/` has been compiled,
+signed, or run.** It was written in a Linux sandbox with no WDK, no MSVC,
+and no way to check any of it against real WDK headers, a kernel debugger,
+or a real Windows machine. In descending order of how much it matters:
+
+1. **The kernel driver's classify pend/clone/reinject path** — the
+   mechanism that hands a candidate packet to userspace and later
+   re-transmits userspace's verdict (`FwpsPendOperation0`,
+   `FwpsAllocateCloneNetBufferList0`, `FwpsCompleteOperation0`,
+   `FwpsInjectNetworkSendAsync0`/`FwpsInjectNetworkReceiveAsync0`). There is
+   no NFQUEUE equivalent on Windows to lean on — this is a from-scratch
+   reconstruction of the documented "data-modifying callout" pattern, not
+   something built or traced through a kernel debugger.
+   **This is the single riskiest piece of the entire three-platform
+   project** — more speculative even than macOS's open questions, since
+   this is a protocol being invented, not an existing framework being
+   called into.
+2. **WFP callout/filter/sublayer registration shape** — the call sequence
+   (`FwpmEngineOpen0`, `FwpsCalloutRegister0`, `FwpmCalloutAdd0`,
+   `FwpmFilterAdd0`, `FwpmSubLayerAdd0`) is right in outline (well-documented
+   Microsoft sample-code shape) but not checked against a real
+   `fwpmk.h`/`fwpsk.h`.
+3. **A known structural bug, left in deliberately rather than silently
+   glossed over:** the in-kernel pended-packet struct currently reuses a
+   single list-entry field for two different lists (the in-flight-by-ID
+   table and the ready-for-dequeue queue) — flagged inline in the driver
+   source as something to fix before this compiles correctly.
+4. **The IOCTL dispatch, candidate table, and pending-read queue** —
+   ordinary, well-trodden WDM patterns. Highest-confidence part of the
+   driver, on par with the Linux module's own netfilter-hook bookkeeping.
+5. **The background service and control utility** — ordinary Win32
+   (`DeviceIoControl`, SCM service boilerplate). The one genuine
+   architecture decision here (not just an API-verification risk): the
+   service needs two threads where Linux's daemon needs one, since a
+   blocking `DeviceIoControl` call has no signal-interrupt equivalent to
+   lean on for periodic config reload — every access to the shared
+   keychain/config state is serialized with an explicit lock as a result.
+
+Treat this the same way the Linux kernel module was treated before it was
+ever built: a careful, best-effort starting point that needs real WDK
+test-signing hardware and a kernel debugger to finish, not a working
+deliverable.
+
+### Architecture
+
+```
+                         ┌─────────────────────────────────────────┐
+                         │   otp_firewall_driver.sys (WFP callout  │
+                         │   driver, kernel mode)                  │
+                         │                                         │
+  outgoing packet ───────►  known destination? ─ no ──► blocked    │
+                         │           │ maybe                       │
+                         │           ▼                             │
+  incoming packet ───────►  known source? ─ no ──► blocked         │
+                         │           │ maybe                       │
+                         │           ▼                             │
+                         │  ICMPv6? ─ yes ──► pass through as-is   │
+                         └───────────┼─────────────────────────────┘
+                                     │ \\.\OTPFirewall (custom IOCTL queue)
+                         ┌───────────▼─────────────────────────────┐
+                         │   otp_firewall_svc.exe  (Windows        │
+                         │   Service, userspace)                   │
+                         │                                         │
+                         │  outgoing: encrypt for the matched      │
+                         │  contact, or block if none is matched   │
+                         │                                         │
+                         │  incoming: try to decrypt against your  │
+                         │  contacts' keys; allow through on the   │
+                         │  first one that works, otherwise block  │
+                         └─────────────────────────────────────────┘
+```
+
+Only TCP and UDP traffic is affected. Every other protocol is blocked,
+except IPv6 Neighbor Discovery, which always passes through untouched.
+
+### What's reused unmodified vs. what's new
+
+`cipher.c`/`keychain.c`/`commit.c` need **zero changes** — `src/compat.h`
+already branches cleanly on `_WIN32` vs. real POSIX, and this project's own
+`make mingw` target already proves out warning-free MinGW-w64
+cross-compilation of the core library.
+
+Of `firewall/daemon/`'s own files, small additive `#ifdef _WIN32` guards
+(header swaps, `_mkdir`/`_chdir`, `CreateSymbolicLinkA` in place of
+`symlink()`) were enough to make `common.h`, `checksum.h`/`.c`,
+`config.h`/`.c`, `pin.h`/`.c`, `trial.h`/`.c`, `keychain_setup.h`/`.c`,
+`log.h`/`.c`, `packet_codec.h`, and `kernel_ctl.h` build for Windows too,
+reused **directly, unmodified beyond those guards**.
+`firewall/windows-wfp-callout-driver/Shared/packet_codec_windows.c` and
+`Service/kernel_ctl_windows.c` compile **instead of**
+`firewall/daemon/packet_codec.c` and `firewall/daemon/kernel_ctl.c`
+respectively — same public APIs, Windows-specific bodies (this project's
+own `#pragma pack(push,1)` header structs instead of an OS-provided one,
+since Windows has no standard `struct iphdr`; `DeviceIoControl` instead of
+a `/proc` file write).
+
+New for Windows, all under `firewall/windows-wfp-callout-driver/`:
+
+- `Driver/otp_firewall_protocol.h` — the wire format shared verbatim by the
+  driver and every userspace consumer.
+- `Driver/otp_firewall_driver.h`/`.c` — the WFP callout driver: the
+  Windows equivalent of `firewall/linux-kernel-module/otp_firewall.c`.
+- `Service/otp_firewall_svc.c` — the background Windows Service playing
+  `otp-firewalld`'s role.
+- `Ctl/otpfwctl.c` — the kill-switch control utility.
+
+### File locations
+
+Identical to [Linux](#file-locations) — `~/.otp/firewall_keychain/`,
+`~/.otp/.keychain`, `~/.otp/firewall.config`, `~/.otp/authorized.log`,
+`~/.otp/restricted.log` — since the code that reads and writes them needs
+only small `_WIN32` guards, not logic changes.
+
+### Log format
+
+Identical to [Linux](#log-format) — same line format, same `reason` values.
+
+### Known gaps beyond the "what's verified" list above
+
+- **Secure Boot must be disabled** for test-signed drivers to load at all —
+  a real, machine-wide security reduction for as long as you're testing
+  this driver, not just a one-line command. Revert it when you're done (see
+  ["How to install/use it (Windows)"](#how-to-installuse-it-windows)).
+- **No equivalent of the Linux daemon's test suite.**
+  `firewall/linux-kernel-module/tests/` builds and runs against a real
+  POSIX toolchain; nothing on the Windows side has been exercised the same
+  way, because there's no WDK/MSVC toolchain available in the environment
+  this was written in at all.
+- **IPv6 extension header walking, IP fragmentation**: same v1 scope
+  limits as the other two platforms (see ["Limitations"](#limitations)),
+  not re-verified for the WFP packet-layer path here.
+- **No independent code review.** The Linux side has been through four
+  rounds of independent review with real bugs found and fixed each time;
+  the Windows port hasn't been reviewed at all yet.
