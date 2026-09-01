@@ -1,5 +1,5 @@
 /*
- * otp_firewall_protocol.h - the wire format for talking to
+ * otp_toolkit_firewall.h - the wire format for talking to
  * \\.\OTPFirewall, shared verbatim between the kernel driver and every
  * userspace consumer (Service/, Ctl/). Deliberately dependency-free
  * (just <stdint.h>) so it compiles unchanged in both kernel and
@@ -14,8 +14,8 @@
  * including it.
  */
 
-#ifndef OTP_FW_PROTOCOL_H
-#define OTP_FW_PROTOCOL_H
+#ifndef OTP_TOOLKIT_FIREWALL_H
+#define OTP_TOOLKIT_FIREWALL_H
 
 #include <stdint.h>
 
@@ -117,4 +117,4 @@ typedef struct
 
 #pragma pack(pop)
 
-#endif /* OTP_FW_PROTOCOL_H */
+#endif /* OTP_TOOLKIT_FIREWALL_H */

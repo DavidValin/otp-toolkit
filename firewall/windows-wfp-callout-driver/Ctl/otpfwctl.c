@@ -8,7 +8,7 @@
  * UNVERIFIED - see ../README.md.
  */
 
-#include "../Driver/otp_firewall_protocol.h"
+#include "../Driver/otp_toolkit_firewall.h"
 
 #include <windows.h>
 #include <stdio.h>
@@ -40,7 +40,7 @@ static int set_enabled(int enabled)
     fprintf(stderr, "Error: DeviceIoControl(SET_ENABLED) failed: %lu\n", GetLastError());
     return 1;
   }
-  printf("otp firewall: %s\n", enabled ? "enabled (enforcing)" : "disabled (fail-open passthrough)");
+  printf("otp-toolkit firewall: %s\n", enabled ? "enabled (enforcing)" : "disabled (fail-open passthrough)");
   return 0;
 }
 
@@ -59,7 +59,7 @@ static int get_status(void)
     fprintf(stderr, "Error: DeviceIoControl(GET_ENABLED) failed: %lu\n", GetLastError());
     return 1;
   }
-  printf("otp firewall: %s\n", v ? "enabled (enforcing)" : "disabled (fail-open passthrough)");
+  printf("otp-toolkit firewall: %s\n", v ? "enabled (enforcing)" : "disabled (fail-open passthrough)");
   return 0;
 }
 

@@ -37,7 +37,7 @@
 #include "keychain.h"
 #include "cipher.h"
 
-#include "../Driver/otp_firewall_protocol.h"
+#include "../Driver/otp_toolkit_firewall.h"
 
 #include <winsock2.h>
 #include <ws2tcpip.h>

@@ -1,6 +1,6 @@
-# Userspace unit tests for the OTP_FIREWALL_PROTOCOL daemon logic
-# (firewall/daemon/*.c) - see ../../../docs/FIREWALL.md and README.md in
-# this directory. Run with `make` or `make test`.
+# Userspace unit tests for the OTP_TOOLKIT_FIREWALL daemon logic
+# (firewall/daemon/*.c) - see ../README.md and README.md in this
+# directory. Run with `make` or `make test`.
 #
 # These link the real, unmodified core library (src/cipher.c,
 # src/keychain.c, src/commit.c) exactly as the daemon itself does, plus

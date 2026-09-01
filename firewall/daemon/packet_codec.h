@@ -43,8 +43,9 @@ otp_fw_result_t otp_fw_decrypt_packet(const char *keychain_dir, const CandidateL
  * calls above, these never spend key material. This matters because a
  * genuine successful encrypt/decrypt is not reversible: it permanently
  * consumes one-time-pad key bytes, which log-only mode must not do to
- * traffic it's only supposed to be observing. See the "Rollout mode"
- * section of docs/FIREWALL.md.
+ * traffic it's only supposed to be observing. See
+ * ../linux-kernel-module/README.md's "Activate" section for how a
+ * caller (e.g. otp-firewalld's --mode=log-only) is meant to use this.
  *
  * otp_fw_classify_egress() can determine a full OTP_FW_OK/otherwise
  * verdict for free (contact selection is deterministic from

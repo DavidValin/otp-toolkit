@@ -1,4 +1,4 @@
-# OTP_FIREWALL_PROTOCOL tests
+# OTP_TOOLKIT_FIREWALL tests
 
 ## Userspace tests (run these)
 
@@ -25,8 +25,8 @@ keychains, not the network stack.
 
 `main.c` (the NFQUEUE event loop itself) isn't covered here: it's a thin
 wrapper around the logic above, and exercising it for real needs an
-actual kernel + netfilter environment - see the integration checklist in
-`docs/FIREWALL.md`'s Verification section instead.
+actual kernel + netfilter environment - see `../README.md`'s "Activate"
+section for the real insmod/`otp-firewalld`/kill-switch steps instead.
 
 `make clean` removes the built test binaries and any scratch keychain
 directories left in `/tmp`.
@@ -40,13 +40,13 @@ the netfilter hooks use to decide whether a packet is even worth queuing
 to userspace. Everything else in that file (the hooks themselves, the
 proc handlers) needs a real `struct sk_buff`/`struct file`/VFS context to
 exercise meaningfully, which isn't something a unit test can construct in
-isolation - see `docs/FIREWALL.md`'s Verification section for the
-insmod/rmmod-based integration checklist that actually covers those.
+isolation - see `../README.md`'s "Activate" section for the
+insmod/rmmod-based real-world steps that actually cover those.
 
 This file could not be built or run in the environment it was written
 in (no `linux-headers` package installed, so no `/lib/modules/$(uname
--r)/build` to build a KUnit module against - see docs/FIREWALL.md's
-prerequisites). Once you have kernel headers and `CONFIG_KUNIT` enabled,
+-r)/build` to build a KUnit module against - see `../README.md`'s
+"Compile" section for the kernel-headers prerequisite). Once you have kernel headers and `CONFIG_KUNIT` enabled,
 wire it up with a `Kbuild` fragment like:
 
 ```

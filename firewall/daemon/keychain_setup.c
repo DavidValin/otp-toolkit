@@ -17,8 +17,8 @@
  * error rather than a bare Win32 error code. This whole block - the
  * only Windows-specific logic in this file beyond the mkdir/chdir
  * signature differences - could not be tested against a real Windows
- * system; see docs/FIREWALL.md's Windows section for the same caveat
- * that applies to the rest of firewall/windows-wfp-callout-driver/. */
+ * system; see ../windows-wfp-callout-driver/README.md for the same
+ * caveat that applies to the rest of that directory. */
 #ifdef _WIN32
 #include <direct.h> /* _mkdir, _chdir */
 #include <windows.h>

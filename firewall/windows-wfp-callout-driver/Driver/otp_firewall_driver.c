@@ -707,26 +707,26 @@ NTSTATUS OtpFwRegisterCallouts(void)
 
   FWPM_SUBLAYER0 sublayer = {0};
   sublayer.subLayerKey = OTP_FW_SUBLAYER;
-  sublayer.displayData.name = L"OTP Firewall Sublayer";
+  sublayer.displayData.name = L"OTP-toolkit Firewall Sublayer";
   sublayer.weight = 0x8000;
   status = FwpmSubLayerAdd0(g_otp_fw_ext->wfp_engine, &sublayer, NULL);
   if (!NT_SUCCESS(status))
     return status;
 
   status = OtpFwAddCalloutAndFilter(&FWPM_LAYER_OUTBOUND_IPPACKET_V4, &OTP_FW_CALLOUT_OUTBOUND_V4,
-                                    &OTP_FW_FILTER_OUTBOUND_V4, OtpFwClassifyOutboundV4, L"OTP Firewall Outbound v4");
+                                    &OTP_FW_FILTER_OUTBOUND_V4, OtpFwClassifyOutboundV4, L"OTP-toolkit Firewall Outbound v4");
   if (!NT_SUCCESS(status))
     return status;
   status = OtpFwAddCalloutAndFilter(&FWPM_LAYER_INBOUND_IPPACKET_V4, &OTP_FW_CALLOUT_INBOUND_V4,
-                                    &OTP_FW_FILTER_INBOUND_V4, OtpFwClassifyInboundV4, L"OTP Firewall Inbound v4");
+                                    &OTP_FW_FILTER_INBOUND_V4, OtpFwClassifyInboundV4, L"OTP-toolkit Firewall Inbound v4");
   if (!NT_SUCCESS(status))
     return status;
   status = OtpFwAddCalloutAndFilter(&FWPM_LAYER_OUTBOUND_IPPACKET_V6, &OTP_FW_CALLOUT_OUTBOUND_V6,
-                                    &OTP_FW_FILTER_OUTBOUND_V6, OtpFwClassifyOutboundV6, L"OTP Firewall Outbound v6");
+                                    &OTP_FW_FILTER_OUTBOUND_V6, OtpFwClassifyOutboundV6, L"OTP-toolkit Firewall Outbound v6");
   if (!NT_SUCCESS(status))
     return status;
   status = OtpFwAddCalloutAndFilter(&FWPM_LAYER_INBOUND_IPPACKET_V6, &OTP_FW_CALLOUT_INBOUND_V6,
-                                    &OTP_FW_FILTER_INBOUND_V6, OtpFwClassifyInboundV6, L"OTP Firewall Inbound v6");
+                                    &OTP_FW_FILTER_INBOUND_V6, OtpFwClassifyInboundV6, L"OTP-toolkit Firewall Inbound v6");
   return status;
 }
 

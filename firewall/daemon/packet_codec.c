@@ -70,8 +70,8 @@ static int parse_packet(const unsigned char *pkt, int pkt_len, ParsedPacket *pp)
     pp->family = 6;
     pp->ip_hlen = sizeof(struct ip6_hdr);
     /* Extension headers are not walked (documented v1 scope limit in
-     * docs/FIREWALL.md): ip6_nxt is trusted to already name the L4
-     * protocol directly. */
+     * ../README.md's "Limitations"): ip6_nxt is trusted to already name
+     * the L4 protocol directly. */
     pp->proto = ip6->ip6_nxt;
     pp->v6_src = ip6->ip6_src;
     pp->v6_dst = ip6->ip6_dst;

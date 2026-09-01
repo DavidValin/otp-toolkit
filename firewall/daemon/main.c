@@ -193,7 +193,7 @@ static int ingress_cb(struct nfq_q_handle *qh, struct nfgenmsg *nfmsg,
  * because the config now EXPLICITLY maps its IP to a different contact -
  * an IP simply absent from the config (e.g. one that was only ever
  * reached via the fallback keychain scan) must keep its pin, per
- * docs/FIREWALL.md's "Trial-decryption order". */
+ * ../README.md's "Incoming traffic" trial order. */
 static void reconcile_pins_with_config(FwContext *ctx)
 {
   for (int i = 0; i < ctx->pins.count; i++)

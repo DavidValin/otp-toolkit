@@ -268,8 +268,7 @@ int otp_fw_describe_packet(const unsigned char *pkt, int pkt_len,
  * CRT - MinGW-w64 (this project's existing Windows toolchain, see
  * src/compat.h and `make mingw`) does provide them, so building this
  * Windows service with MinGW rather than raw MSVC is assumed throughout
- * this file, the same assumption docs/FIREWALL.md's Windows section
- * states explicitly. */
+ * this file. */
 static FILE *open_payload_stream(const unsigned char *payload, size_t len)
 {
   static unsigned char dummy = 0;

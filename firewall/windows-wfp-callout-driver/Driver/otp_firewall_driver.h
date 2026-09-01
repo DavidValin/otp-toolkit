@@ -18,9 +18,9 @@
 #include <fwpsk.h>
 #include <fwpmk.h>
 
-#include "otp_firewall_protocol.h"
+#include "otp_toolkit_firewall.h"
 
-/* OTP_FW_WIRE_MAX_CANDIDATES itself lives in otp_firewall_protocol.h (it
+/* OTP_FW_WIRE_MAX_CANDIDATES itself lives in otp_toolkit_firewall.h (it
  * bounds the wire format, shared with userspace); this NonPagedPoolNx
  * allocation is sized to that same cap rather than kernel-side dynamic
  * growth - simpler to get right in code this hard to test. */

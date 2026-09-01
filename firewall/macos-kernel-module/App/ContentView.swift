@@ -14,7 +14,7 @@ struct ContentView: View {
 
   var body: some View {
     VStack(spacing: 16) {
-      Text("OTP Firewall").font(.title)
+      Text("OTP-toolkit Firewall").font(.title)
       Text(controller.statusText).foregroundColor(.secondary)
 
       Button("1. Activate Extension") {

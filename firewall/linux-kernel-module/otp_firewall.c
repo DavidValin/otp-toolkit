@@ -1,5 +1,5 @@
 /*
- * otp_firewall.c - OTP_FIREWALL_PROTOCOL kernel-side packet interception.
+ * otp_firewall.c - OTP_TOOLKIT_FIREWALL kernel-side packet interception.
  *
  * Deliberately thin: this module never touches packet payload bytes, does
  * no crypto and no file I/O. Its only job is a fast in-kernel "is this
@@ -7,10 +7,10 @@
  * packets to userspace (otp-firewalld) via the standard NFQUEUE verdict -
  * the actual trial-decryption, packet growth/shrink and checksum work all
  * happen there, reusing the existing (unmodified) otp cipher/keychain
- * library. See docs/FIREWALL.md for the full design and why it's split
+ * library. See README.md in this directory ("Architecture") for the full design and why it's split
  * this way.
  *
- * Scope (v1, documented in docs/FIREWALL.md): hooks are registered only in
+ * Scope (v1): hooks are registered only in
  * init_net (no per-namespace/container support), and only TCP/UDP over
  * IPv4/IPv6 are considered - every other IP protocol is dropped while
  * enabled, except ICMPv6 (Neighbor Discovery, MLD, PMTU/error signaling),
@@ -57,7 +57,7 @@
 
 MODULE_LICENSE("Dual BSD/GPL");
 MODULE_AUTHOR("David Valin <hola@davidvalin.com>");
-MODULE_DESCRIPTION("OTP_FIREWALL_PROTOCOL - kernel-side packet interception (see docs/FIREWALL.md)");
+MODULE_DESCRIPTION("OTP_TOOLKIT_FIREWALL - kernel-side packet interception (see README.md in this directory)");
 
 static ushort queue_egress = 0;
 static ushort queue_ingress = 1;
@@ -397,7 +397,7 @@ static int __init otp_firewall_init(void)
    * elsewhere (e.g. otp_fw_queue_verdict()). Depends on the standard
    * nf_defrag_ipv4/nf_defrag_ipv6 modules being loadable - `modprobe
    * nf_defrag_ipv4 nf_defrag_ipv6` first if insmod reports them as
-   * unresolved symbols; see docs/FIREWALL.md. */
+   * unresolved symbols; see README.md in this directory's "Activate" section. */
   rc = nf_defrag_ipv4_enable(&init_net);
   if (rc)
   {
@@ -427,7 +427,7 @@ static int __init otp_firewall_init(void)
   g_hook_ops[2].hook = otp_fw_hook_ingress;
   g_hook_ops[2].pf = NFPROTO_IPV4;
   g_hook_ops[2].hooknum = NF_INET_PRE_ROUTING;
-  g_hook_ops[2].priority = NF_IP_PRI_RAW; /* before conntrack - see docs/FIREWALL.md */
+  g_hook_ops[2].priority = NF_IP_PRI_RAW; /* before conntrack - see README.md in this directory's "Architecture" section */
 
   g_hook_ops[3].hook = otp_fw_hook_ingress;
   g_hook_ops[3].pf = NFPROTO_IPV6;

@@ -77,7 +77,7 @@ musl:
 	@echo " - Tested!"
 	@echo
 
-# OTP_FIREWALL_PROTOCOL - see docs/FIREWALL.md. Separate from the targets
+# OTP_TOOLKIT_FIREWALL - see firewall/README.md. Separate from the targets
 # above: building/installing the firewall never affects the plain otp CLI.
 FIREWALL_BIN := bin/otp-firewalld
 
@@ -110,8 +110,8 @@ install-firewall: firewall-daemon firewall-kmod
 	@mv $(FIREWALL_BIN) /usr/local/bin/otp-firewalld
 	@echo " - Installed! Load the kernel module with:"
 	@echo "     sudo insmod firewall/linux-kernel-module/otp_firewall.ko"
-	@echo "   then run 'sudo otp-firewalld' - see docs/FIREWALL.md for the kill switch,"
-	@echo "   log-only rollout mode, and firewall.config format."
+	@echo "   then run 'sudo otp-firewalld' - see firewall/linux-kernel-module/README.md"
+	@echo "   for the kill switch, log-only rollout mode, and firewall.config format."
 	@echo
 
 mingw:

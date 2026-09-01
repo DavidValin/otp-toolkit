@@ -20,8 +20,8 @@ typedef struct
 /* Read-only check (commit_classify(), commit.h:164-167) for whether `c`
  * is safe to hand to encrypt_with_contact()/decrypt_with_contact() for
  * live packet traffic right now. False whenever the contact has a
- * leftover interrupted operation in that direction - see the
- * "Trial-decryption order" section of docs/FIREWALL.md for why calling
+ * leftover interrupted operation in that direction - see
+ * ../README.md's "Incoming traffic" trial order for why calling
  * the real encrypt/decrypt in that state would misbehave. `direction`
  * is "enc" or "dec". */
 int otp_fw_contact_ready(const char *keychain_dir, Contact *c, const char *direction);
