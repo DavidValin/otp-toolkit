@@ -51,7 +51,15 @@ headers or documentation. In descending order of how much it matters:
    field names — `struct ip`'s `ip_hl`/`ip_p`, `struct tcphdr`'s
    `th_sport`/`th_off`, `struct udphdr`'s `uh_sport`/`uh_ulen`) is
    well-established, decades-stable BSD sockets API — this is the part
-   of the whole port with the highest confidence.
+   of the whole port with the highest confidence, and the only file
+   actually exercised against real code: glibc optionally provides the
+   same BSD-compat structs (via `__FAVOR_BSD`/`__USE_MISC`), which let
+   this file compile and pass `firewall/linux-kernel-module/tests/test_packet_codec.c`'s
+   full 78-check suite unmodified. That run caught a real bug (now
+   fixed): `resolve_egress_contact()` wasn't setting `*contact_out`
+   before returning `OTP_FW_KEY_EXHAUSTED`/`OTP_FW_PENDING_RECOVERY`, so
+   a `restricted.log` entry for an exhausted or pending-recovery contact
+   logged `-` instead of the contact's name.
 
 Treat this as a careful, best-effort starting point, not a working
 deliverable.

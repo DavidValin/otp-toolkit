@@ -1,26 +1,26 @@
 /*
- * packet_codec_macos.c - macOS port of firewall/daemon/packet_codec.c.
+ * packet_codec_freebsd.c - FreeBSD port of firewall/daemon/packet_codec.c.
  *
- * UNVERIFIED: written without access to a macOS SDK/Xcode/compiler - see
- * ../README.md for the full list of what that means here. The only
- * change from the Linux version is header-struct field names: Darwin's
- * <netinet/ip.h>/<netinet/tcp.h>/<netinet/udp.h> are natively
- * BSD-style (struct ip/ip_hl/ip_p, struct tcphdr/th_sport/th_off, struct
- * udphdr/uh_sport/uh_ulen) where Linux's glibc headers used the
- * glibc-native struct iphdr/ihl/protocol naming instead. <netinet/ip6.h>
- * is unchanged - Darwin and glibc both use the same BSD-derived
- * ip6_ctlun-union layout for struct ip6_hdr, so that part is identical
- * to the Linux version. Every non-header-name-dependent function below
+ * UNVERIFIED (not built on a real FreeBSD machine), but the highest
+ * confidence file in this whole port: FreeBSD's <netinet/ip.h>/
+ * <netinet/tcp.h>/<netinet/udp.h>/<netinet/ip6.h> are the reference BSD
+ * sockets networking headers - the same struct ip/ip_hl/ip_p,
+ * struct tcphdr/th_sport/th_off, struct udphdr/uh_sport/uh_ulen,
+ * struct ip6_hdr/ip6_nxt/ip6_plen field names Darwin (macOS) itself
+ * derives from, decades-stable and unchanged across the BSD family. This
+ * file is therefore closer to a straight copy of
+ * ../../macos-kernel-module/Shared/packet_codec_macos.c than a genuine
+ * rewrite - only this header comment and the include list differ; every
+ * function body is identical. Every non-header-name-dependent function
  * (resolve_egress_contact, otp_fw_classify_egress/_ingress,
  * otp_fw_encrypt_packet, otp_fw_decrypt_packet, the payload-stream
- * helpers) is copied verbatim - it never touches these struct fields
- * directly, only through the two fix_ipv{4,6}_lengths_and_checksums()
- * helpers below, which are the only functions actually rewritten here.
+ * helpers) never touches these struct fields directly, only through the
+ * two fix_ipv{4,6}_lengths_and_checksums() helpers below.
  *
  * This file declares the exact same public API as packet_codec.h
  * (reused unmodified from firewall/daemon/ - it declares no
- * Linux-specific types), so it's a drop-in replacement: the Xcode
- * project compiles this file instead of firewall/daemon/packet_codec.c.
+ * platform-specific types), so it's a drop-in replacement: compile this
+ * file instead of firewall/daemon/packet_codec.c.
  */
 
 #include "packet_codec.h"
@@ -53,17 +53,7 @@ typedef struct
 } ParsedPacket;
 
 /* Bounds-checks everything: `pkt` is untrusted network input by design
- * (this is the code that decides whether it gets to exist at all).
- *
- * Assumes NEPacket's raw bytes are ordinary wire-format (network byte
- * order) throughout, same as any packet capture. This is the standard,
- * sane assumption and matches Apple's documented description of
- * NEPacket.data - but note the classic BSD raw-socket quirk (some BSD
- * raw-socket APIs historically expected/returned struct ip's ip_len/
- * ip_off in HOST byte order, not network order) for context: if it ever
- * turns out NEPacketTunnelProvider inherits that quirk for these two
- * fields specifically, the ntohs() calls on tot_len below would need to
- * become no-ops. Unverified either way - flagged in ../README.md. */
+ * (this is the code that decides whether it gets to exist at all). */
 static int parse_packet(const unsigned char *pkt, int pkt_len, ParsedPacket *pp)
 {
   if (pkt_len < 1)

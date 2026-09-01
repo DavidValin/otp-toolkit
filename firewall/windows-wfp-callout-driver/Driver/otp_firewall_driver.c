@@ -18,8 +18,8 @@
  *     FWPM_LAYER_{OUTBOUND,INBOUND}_IPPACKET_V{4,6}) - the sequence of
  *     calls is right in outline, but exact struct field names/flags
  *     were not checked against a real WDK header.
- *   - LOWEST (genuinely unverified, the single riskiest piece of the
- *     whole three-platform project): the classify function's
+ *   - LOWEST (genuinely unverified, the single riskiest piece of this
+ *     port): the classify function's
  *     pend/clone/reinject mechanics - FwpsPendOperation0,
  *     FwpsAllocateCloneNetBufferList0, FwpsCompleteOperation0, and
  *     FwpsInjectNetworkSendAsync0/FwpsInjectNetworkReceiveAsync0. There

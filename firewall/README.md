@@ -205,6 +205,10 @@ compile/configure/activate/deactivate instructions:
   a custom Windows Filtering Platform callout driver plus a background
   Windows Service. Never compiled — written without access to the Windows
   Driver Kit.
+- **[FreeBSD Kernel Module](freebsd-kernel-module/README.md)** — a real
+  `pfil(9)`-based kernel module plus a userspace daemon, talking over a
+  custom character device. Never compiled — written without access to a
+  FreeBSD machine.
 
 Maturity differs sharply between them — see each platform's own README for
 exactly what is and isn't verified before relying on it for anything.
