@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Grants this extension permission to register as the specific
+	     NetworkExtension provider type its Info.plist declares
+	     (packet-tunnel-provider, matching com.apple.networkextension.
+	     packet-tunnel there). Requires this capability to be enabled for
+	     your App ID in the Apple Developer portal. -->
+	<key>com.apple.developer.networking.networkextension</key>
+	<array>
+		<string>packet-tunnel-provider</string>
+	</array>
+	<!-- UNVERIFIED: whether opening a raw socket (see
+	     otp_fw_bridge_send_raw() in OTPFirewallBridge.c) requires an
+	     additional entitlement beyond the networkextension one above, or
+	     whether it's implicitly permitted for a packet-tunnel-provider
+	     extension's process. If raw socket creation fails with
+	     EPERM/EACCES at runtime, this is the first place to look. -->
+</dict>
+</plist>

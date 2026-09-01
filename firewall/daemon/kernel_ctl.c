@@ -19,8 +19,16 @@ static int write_proc_file(const char *path, const char *data, size_t len)
       fprintf(stderr, "Warning: cannot open '%s': %s\n", path, strerror(errno));
     return -1;
   }
+  /* A zero-length candidate set (the last contact just got removed from
+   * firewall.config) must still reach the kernel as an explicit "replace
+   * the table with nothing" write, not be skipped as a no-op - otherwise
+   * there is no way to ever clear a previously-pushed candidate table
+   * back to empty, and the kernel keeps queuing packets for IPs that are
+   * no longer configured anywhere. A single write() with len==0 is a
+   * well-defined, valid call (returns 0, not an error) and still reaches
+   * the kernel's candidates_write() handler. */
   size_t off = 0;
-  while (off < len)
+  do
   {
     ssize_t n = write(fd, data + off, len - off);
     if (n < 0)
@@ -30,7 +38,7 @@ static int write_proc_file(const char *path, const char *data, size_t len)
       return -1;
     }
     off += (size_t)n;
-  }
+  } while (off < len);
   close(fd);
   return 0;
 }

@@ -73,6 +73,20 @@ static void carry_forward_resolved_ips(FwConfig *cfg, const FwConfig *old)
   }
 }
 
+/* Shared cleanup for both post-fopen() failure paths below (a partial
+ * new parse that hit the entry cap, or a read error): discard whatever
+ * of the new parse exists in `cfg` and restore `old` into it, so a
+ * mid-load failure never leaves `cfg` half-built or empty. Doesn't
+ * itself return - callers still need their own `return -1;`, this just
+ * keeps the four-line sequence from drifting between the two call
+ * sites. */
+static void restore_old_config(FILE *f, FwConfig *cfg, FwConfig *old)
+{
+  fclose(f);
+  fwconfig_free(cfg);
+  *cfg = *old;
+}
+
 int fwconfig_load(const char *path, FwConfig *cfg)
 {
   FwConfig old = *cfg; /* takes ownership of cfg's previous entries array */
@@ -81,10 +95,22 @@ int fwconfig_load(const char *path, FwConfig *cfg)
   FILE *f = fopen(path, "r");
   if (!f)
   {
-    fwconfig_free(&old);
     if (errno == ENOENT)
-      return 0; /* no config yet: empty, not an error */
-    fprintf(stderr, "Error: cannot open '%s': %s\n", path, strerror(errno));
+    {
+      /* No config yet (or deliberately removed): empty is the correct,
+       * intentional result here, not a failure to fall back from. */
+      fwconfig_free(&old);
+      return 0;
+    }
+    /* Any other fopen() failure (EACCES, EMFILE, a transient EIO, ...)
+     * must not silently wipe every configured contact just because one
+     * reload attempt hit a hiccup - restore the last-known-good config
+     * instead of leaving `cfg` empty, the same "keep going on a
+     * transient failure" principle fwconfig_resolve() already applies
+     * to individual hostname lookups. */
+    fprintf(stderr, "Error: cannot open '%s': %s - keeping the previous configuration\n",
+           path, strerror(errno));
+    *cfg = old;
     return -1;
   }
 
@@ -106,14 +132,30 @@ int fwconfig_load(const char *path, FwConfig *cfg)
     {
       if (fwconfig_append(cfg, contact, host) != 0)
       {
-        fclose(f);
-        fwconfig_free(&old);
+        /* Same principle: discard the partial new parse and restore the
+         * previous good config rather than leaving `cfg` half-built. */
+        restore_old_config(f, cfg, &old);
         return -1;
       }
       any = 1;
     }
     if (!any)
       fprintf(stderr, "Warning: firewall.config: contact '%s' has no ip/host entries, ignoring\n", contact);
+  }
+
+  /* fgets() returns NULL both at a clean EOF and on a read error (e.g.
+   * `path` names a directory: fopen() succeeds on Linux even though
+   * nothing there can actually be read, so the failure only surfaces
+   * here), and the two are not interchangeable - without this check, a
+   * mid-read failure looks identical to "successfully parsed an empty
+   * file" and would wipe the config exactly like the on-open failure
+   * path above is trying to avoid. */
+  if (ferror(f))
+  {
+    fprintf(stderr, "Error: failed reading '%s': %s - keeping the previous configuration\n",
+           path, strerror(errno));
+    restore_old_config(f, cfg, &old);
+    return -1;
   }
   fclose(f);
 

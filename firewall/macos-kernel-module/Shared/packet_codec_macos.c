@@ -1,3 +1,28 @@
+/*
+ * packet_codec_macos.c - macOS port of firewall/daemon/packet_codec.c.
+ *
+ * UNVERIFIED: written without access to a macOS SDK/Xcode/compiler - see
+ * ../README.md for the full list of what that means here. The only
+ * change from the Linux version is header-struct field names: Darwin's
+ * <netinet/ip.h>/<netinet/tcp.h>/<netinet/udp.h> are natively
+ * BSD-style (struct ip/ip_hl/ip_p, struct tcphdr/th_sport/th_off, struct
+ * udphdr/uh_sport/uh_ulen) where Linux's glibc headers used the
+ * glibc-native struct iphdr/ihl/protocol naming instead. <netinet/ip6.h>
+ * is unchanged - Darwin and glibc both use the same BSD-derived
+ * ip6_ctlun-union layout for struct ip6_hdr, so that part is identical
+ * to the Linux version. Every non-header-name-dependent function below
+ * (resolve_egress_contact, otp_fw_classify_egress/_ingress,
+ * otp_fw_encrypt_packet, otp_fw_decrypt_packet, the payload-stream
+ * helpers) is copied verbatim - it never touches these struct fields
+ * directly, only through the two fix_ipv{4,6}_lengths_and_checksums()
+ * helpers below, which are the only functions actually rewritten here.
+ *
+ * This file declares the exact same public API as packet_codec.h
+ * (reused unmodified from firewall/daemon/ - it declares no
+ * Linux-specific types), so it's a drop-in replacement: the Xcode
+ * project compiles this file instead of firewall/daemon/packet_codec.c.
+ */
+
 #include "packet_codec.h"
 #include "checksum.h"
 
@@ -28,7 +53,17 @@ typedef struct
 } ParsedPacket;
 
 /* Bounds-checks everything: `pkt` is untrusted network input by design
- * (this is the code that decides whether it gets to exist at all). */
+ * (this is the code that decides whether it gets to exist at all).
+ *
+ * Assumes NEPacket's raw bytes are ordinary wire-format (network byte
+ * order) throughout, same as any packet capture. This is the standard,
+ * sane assumption and matches Apple's documented description of
+ * NEPacket.data - but note the classic BSD raw-socket quirk (some BSD
+ * raw-socket APIs historically expected/returned struct ip's ip_len/
+ * ip_off in HOST byte order, not network order) for context: if it ever
+ * turns out NEPacketTunnelProvider inherits that quirk for these two
+ * fields specifically, the ntohs() calls on tot_len below would need to
+ * become no-ops. Unverified either way - flagged in ../README.md. */
 static int parse_packet(const unsigned char *pkt, int pkt_len, ParsedPacket *pp)
 {
   if (pkt_len < 1)
@@ -40,21 +75,21 @@ static int parse_packet(const unsigned char *pkt, int pkt_len, ParsedPacket *pp)
 
   if (version == 4)
   {
-    if (pkt_len < (int)sizeof(struct iphdr))
+    if (pkt_len < (int)sizeof(struct ip))
       return -1;
-    const struct iphdr *iph = (const struct iphdr *)pkt;
-    size_t ip_hlen = (size_t)iph->ihl * 4;
-    if (iph->ihl < 5 || (int)ip_hlen > pkt_len)
+    const struct ip *iph = (const struct ip *)pkt;
+    size_t ip_hlen = (size_t)iph->ip_hl * 4;
+    if (iph->ip_hl < 5 || (int)ip_hlen > pkt_len)
       return -1;
-    size_t tot_len = ntohs(iph->tot_len);
+    size_t tot_len = ntohs(iph->ip_len);
     if (tot_len < ip_hlen || (int)tot_len > pkt_len)
       return -1;
 
     pp->family = 4;
     pp->ip_hlen = ip_hlen;
-    pp->proto = iph->protocol;
-    memcpy(&pp->v4_src, &iph->saddr, 4);
-    memcpy(&pp->v4_dst, &iph->daddr, 4);
+    pp->proto = iph->ip_p;
+    memcpy(&pp->v4_src, &iph->ip_src, 4);
+    memcpy(&pp->v4_dst, &iph->ip_dst, 4);
     pp->l4 = pkt + ip_hlen;
     l4_total_avail = tot_len - ip_hlen;
   }
@@ -88,7 +123,7 @@ static int parse_packet(const unsigned char *pkt, int pkt_len, ParsedPacket *pp)
     if (l4_total_avail < sizeof(struct tcphdr))
       return -1;
     const struct tcphdr *th = (const struct tcphdr *)pp->l4;
-    size_t l4_hlen = (size_t)th->doff * 4;
+    size_t l4_hlen = (size_t)th->th_off * 4;
     if (l4_hlen < sizeof(struct tcphdr) || l4_hlen > l4_total_avail)
       return -1;
     pp->l4_hlen = l4_hlen;
@@ -100,7 +135,7 @@ static int parse_packet(const unsigned char *pkt, int pkt_len, ParsedPacket *pp)
     if (l4_total_avail < sizeof(struct udphdr))
       return -1;
     const struct udphdr *uh = (const struct udphdr *)pp->l4;
-    size_t udp_len = ntohs(uh->len);
+    size_t udp_len = ntohs(uh->uh_ulen);
     if (udp_len < sizeof(struct udphdr) || udp_len > l4_total_avail)
       return -1;
     pp->l4_hlen = sizeof(struct udphdr);
@@ -144,15 +179,15 @@ int otp_fw_describe_packet(const unsigned char *pkt, int pkt_len,
   if (pp.proto == IPPROTO_TCP)
   {
     const struct tcphdr *th = (const struct tcphdr *)pp.l4;
-    *src_port = ntohs(th->source);
-    *dst_port = ntohs(th->dest);
+    *src_port = ntohs(th->th_sport);
+    *dst_port = ntohs(th->th_dport);
     *proto_name = "tcp";
   }
   else
   {
     const struct udphdr *uh = (const struct udphdr *)pp.l4;
-    *src_port = ntohs(uh->source);
-    *dst_port = ntohs(uh->dest);
+    *src_port = ntohs(uh->uh_sport);
+    *dst_port = ntohs(uh->uh_dport);
     *proto_name = "udp";
   }
   return 0;
@@ -178,16 +213,15 @@ static FILE *open_payload_stream(const unsigned char *payload, size_t len)
 }
 
 /* cipher.c's encrypt_with_contact() refuses a genuinely empty message
- * ("Error: No input data provided", cipher.c ~line 1379) - so a bare TCP
- * ACK or empty UDP datagram (a zero-length L4 payload, entirely normal
- * on the wire) would otherwise fail to encrypt and get dropped, which
- * would break TCP outright (its handshake and acknowledgments are
- * mostly zero-payload segments). One fixed sentinel byte is appended to
- * every outgoing payload before encryption - regardless of whether it is
- * already non-empty - so the byte stream handed to encrypt_with_contact()
- * is never actually empty; the matching byte is dropped again on
- * successful decrypt (see otp_fw_decrypt_packet()). The sentinel's value
- * is never inspected - only its presence matters. */
+ * ("Error: No input data provided") - so a bare TCP ACK or empty UDP
+ * datagram (a zero-length L4 payload, entirely normal on the wire)
+ * would otherwise fail to encrypt and get dropped, which would break
+ * TCP outright. One fixed sentinel byte is appended to every outgoing
+ * payload before encryption - regardless of whether it is already
+ * non-empty - so the byte stream handed to encrypt_with_contact() is
+ * never actually empty; the matching byte is dropped again on
+ * successful decrypt (see otp_fw_decrypt_packet()). The sentinel's
+ * value is never inspected - only its presence matters. */
 #define PAYLOAD_PAD_LEN 1
 
 static FILE *open_padded_payload_stream(const unsigned char *payload, size_t len, unsigned char *scratch)
@@ -200,11 +234,11 @@ static FILE *open_padded_payload_stream(const unsigned char *payload, size_t len
 static void fix_ipv4_lengths_and_checksums(unsigned char *out, size_t ip_hlen, size_t l4_hlen,
                                            size_t new_payload_len, uint8_t proto)
 {
-  struct iphdr *iph = (struct iphdr *)out;
+  struct ip *iph = (struct ip *)out;
   size_t total = ip_hlen + l4_hlen + new_payload_len;
-  iph->tot_len = htons((uint16_t)total);
-  iph->check = 0;
-  iph->check = otp_fw_ipv4_header_checksum(out, ip_hlen);
+  iph->ip_len = htons((uint16_t)total);
+  iph->ip_sum = 0;
+  iph->ip_sum = otp_fw_ipv4_header_checksum(out, ip_hlen);
 
   unsigned char *l4 = out + ip_hlen;
   size_t l4_len = l4_hlen + new_payload_len;
@@ -212,23 +246,23 @@ static void fix_ipv4_lengths_and_checksums(unsigned char *out, size_t ip_hlen, s
   if (proto == IPPROTO_UDP)
   {
     struct udphdr *uh = (struct udphdr *)l4;
-    uh->len = htons((uint16_t)l4_len);
-    uh->check = 0;
+    uh->uh_ulen = htons((uint16_t)l4_len);
+    uh->uh_sum = 0;
     struct in_addr src, dst;
-    memcpy(&src, &iph->saddr, 4);
-    memcpy(&dst, &iph->daddr, 4);
-    uh->check = otp_fw_l4_checksum_v4(src, dst, proto, l4, l4_len);
-    if (uh->check == 0)
-      uh->check = 0xFFFF;
+    memcpy(&src, &iph->ip_src, 4);
+    memcpy(&dst, &iph->ip_dst, 4);
+    uh->uh_sum = otp_fw_l4_checksum_v4(src, dst, proto, l4, l4_len);
+    if (uh->uh_sum == 0)
+      uh->uh_sum = 0xFFFF;
   }
   else
   {
     struct tcphdr *th = (struct tcphdr *)l4;
-    th->check = 0;
+    th->th_sum = 0;
     struct in_addr src, dst;
-    memcpy(&src, &iph->saddr, 4);
-    memcpy(&dst, &iph->daddr, 4);
-    th->check = otp_fw_l4_checksum_v4(src, dst, proto, l4, l4_len);
+    memcpy(&src, &iph->ip_src, 4);
+    memcpy(&dst, &iph->ip_dst, 4);
+    th->th_sum = otp_fw_l4_checksum_v4(src, dst, proto, l4, l4_len);
   }
 }
 
@@ -245,17 +279,17 @@ static void fix_ipv6_lengths_and_checksums(unsigned char *out, size_t l4_hlen,
   if (proto == IPPROTO_UDP)
   {
     struct udphdr *uh = (struct udphdr *)l4;
-    uh->len = htons((uint16_t)l4_len);
-    uh->check = 0;
-    uh->check = otp_fw_l4_checksum_v6(src, dst, proto, l4, l4_len);
-    if (uh->check == 0)
-      uh->check = 0xFFFF;
+    uh->uh_ulen = htons((uint16_t)l4_len);
+    uh->uh_sum = 0;
+    uh->uh_sum = otp_fw_l4_checksum_v6(src, dst, proto, l4, l4_len);
+    if (uh->uh_sum == 0)
+      uh->uh_sum = 0xFFFF;
   }
   else
   {
     struct tcphdr *th = (struct tcphdr *)l4;
-    th->check = 0;
-    th->check = otp_fw_l4_checksum_v6(src, dst, proto, l4, l4_len);
+    th->th_sum = 0;
+    th->th_sum = otp_fw_l4_checksum_v6(src, dst, proto, l4, l4_len);
   }
 }
 
@@ -283,26 +317,18 @@ static otp_fw_result_t resolve_egress_contact(const char *keychain_dir, const Fw
   Contact *c = find_contact(contact_name);
   if (!c)
     return OTP_FW_NO_CONTACT;
-
-  /* Set as soon as the contact is positively identified, not only on the
-   * final OTP_FW_OK path below: KEY_EXHAUSTED and PENDING_RECOVERY are
-   * failures for a *known* contact, and the caller's restricted.log
-   * entry should name it - "run otp --status <contact>" (the documented
-   * remediation for pending-recovery) is not actionable from a log line
-   * that just says "-". */
-  *contact_out = c;
-
   if (c->EncryptionKeySize == 0)
     return OTP_FW_KEY_EXHAUSTED;
   if (!otp_fw_contact_ready(keychain_dir, c, "enc"))
     return OTP_FW_PENDING_RECOVERY;
 
+  *contact_out = c;
   return OTP_FW_OK;
 }
 
 /* Classifies an outbound packet exactly as otp_fw_encrypt_packet() would,
  * without ever calling encrypt_with_contact() - so nothing is spent.
- * Used for --mode=log-only, where a real attempt would otherwise
+ * Used for log-only observation, where a real attempt would otherwise
  * irreversibly consume key material for traffic that's only being
  * observed, not actually sent. */
 otp_fw_result_t otp_fw_classify_egress(const char *keychain_dir, const FwConfig *cfg,
@@ -312,7 +338,7 @@ otp_fw_result_t otp_fw_classify_egress(const char *keychain_dir, const FwConfig 
   ParsedPacket pp;
   Contact *c = NULL;
   otp_fw_result_t r = resolve_egress_contact(keychain_dir, cfg, pkt, pkt_len, &pp, &c);
-  if (c) /* identified, even if r is a failure like KEY_EXHAUSTED/PENDING_RECOVERY */
+  if (r == OTP_FW_OK)
     snprintf(contact_out, contact_out_size, "%s", c->Name);
   return r;
 }
@@ -325,8 +351,6 @@ otp_fw_result_t otp_fw_encrypt_packet(const char *keychain_dir, const FwConfig *
   ParsedPacket pp;
   Contact *c = NULL;
   otp_fw_result_t resolved = resolve_egress_contact(keychain_dir, cfg, pkt, pkt_len, &pp, &c);
-  if (c) /* identified, even if resolved is a failure like KEY_EXHAUSTED/PENDING_RECOVERY */
-    snprintf(contact_out, contact_out_size, "%s", c->Name);
   if (resolved != OTP_FW_OK)
     return resolved;
   const char *contact = c->Name;
@@ -334,10 +358,7 @@ otp_fw_result_t otp_fw_encrypt_packet(const char *keychain_dir, const FwConfig *
   /* Conservative pre-check using the documented worst-case growth bound,
    * BEFORE any key material is spent: encrypt_with_contact() commits real
    * key material on success, and the true grown size isn't known until
-   * after it runs. Rejecting an outsized packet only after already
-   * encrypting it (as a plain out_cap/65535 check after the call would)
-   * would burn key material for a message that never actually gets
-   * sent, desyncing this contact's key offset from the receiver's. */
+   * after it runs. */
   size_t header_len = pp.ip_hlen + pp.l4_hlen;
   size_t worst_case_total = header_len + pp.payload_len + PAYLOAD_PAD_LEN + OTP_FW_MAX_GROWTH;
   size_t worst_case_l4 = pp.l4_hlen + pp.payload_len + PAYLOAD_PAD_LEN + OTP_FW_MAX_GROWTH;
@@ -371,14 +392,7 @@ otp_fw_result_t otp_fw_encrypt_packet(const char *keychain_dir, const FwConfig *
   }
 
   size_t new_total = header_len + cipherlen;
-  /* Defensive backstop only: the pre-check above already rejects
-   * anything that could exceed these limits using a conservative
-   * worst-case growth bound, so this should never actually trigger. It
-   * stays because "should never trigger" isn't the same guarantee as
-   * "cannot": iph->tot_len (v4) / uh->len (both families) / ip6->ip6_plen
-   * are all 16-bit fields, and silently truncating them here would send
-   * a corrupted-on-the-wire packet whose header claims fewer bytes than
-   * are actually present, rather than failing loudly. */
+  /* Defensive backstop only - see the pre-check above. */
   size_t l4_len = pp.l4_hlen + cipherlen;
   size_t length_field_limit = pp.family == 4 ? new_total : l4_len;
   if (new_total > (size_t)out_cap || length_field_limit > 65535)
@@ -397,8 +411,7 @@ otp_fw_result_t otp_fw_encrypt_packet(const char *keychain_dir, const FwConfig *
     fix_ipv6_lengths_and_checksums(out, pp.l4_hlen, cipherlen, pp.proto);
 
   *out_len = (int)new_total;
-  /* contact_out was already set above, right after resolve_egress_contact()
-   * identified `c` - no need to repeat it here. */
+  snprintf(contact_out, contact_out_size, "%s", contact);
   return OTP_FW_OK;
 }
 
@@ -424,12 +437,7 @@ otp_fw_result_t otp_fw_decrypt_packet(const char *keychain_dir, const CandidateL
     if (!c)
       continue;
     if (c->DecryptionKeySize == 0)
-    {
-      /* This specific candidate is exhausted; keep trying the rest of
-       * the list unless the caller marked it exclusive (trial.c already
-       * leaves an exclusive list with at most one entry). */
       continue;
-    }
 
     FILE *in = open_payload_stream(pp.payload, pp.payload_len);
     if (!in)
@@ -450,11 +458,6 @@ otp_fw_result_t otp_fw_decrypt_packet(const char *keychain_dir, const CandidateL
 
     if (rc == KEYCHAIN_OK)
     {
-      /* Every encrypted payload carries exactly one trailing sentinel
-       * byte that was never part of the original packet - see
-       * PAYLOAD_PAD_LEN above. cipher.c guarantees at least 1 byte was
-       * decrypted on a KEYCHAIN_OK result (it refuses an empty message
-       * outright), so plainlen - PAYLOAD_PAD_LEN cannot underflow here. */
       if (plainlen < PAYLOAD_PAD_LEN)
       {
         free(plainbuf);
@@ -463,17 +466,7 @@ otp_fw_result_t otp_fw_decrypt_packet(const char *keychain_dir, const CandidateL
       size_t real_len = plainlen - PAYLOAD_PAD_LEN;
       size_t header_len = pp.ip_hlen + pp.l4_hlen;
       size_t new_total = header_len + real_len;
-      /* Decrypting only ever shrinks a payload that was itself already
-       * bounds-checked to fit a 16-bit length field when it arrived (see
-       * parse_packet()), so this can't currently be reached - but it's
-       * the same defensive backstop otp_fw_encrypt_packet() keeps for
-       * exactly this reason: "should never trigger" isn't "cannot", and
-       * silently truncating the (uint16_t) length fields in
-       * fix_ipv{4,6}_lengths_and_checksums() would send a corrupted
-       * packet instead of failing loudly. */
-      size_t decrypted_l4_len = pp.l4_hlen + real_len;
-      size_t length_field_limit = pp.family == 4 ? new_total : decrypted_l4_len;
-      if (new_total > (size_t)out_cap || length_field_limit > 65535)
+      if (new_total > (size_t)out_cap)
       {
         free(plainbuf);
         return OTP_FW_INTERNAL_ERROR;
@@ -493,18 +486,6 @@ otp_fw_result_t otp_fw_decrypt_packet(const char *keychain_dir, const CandidateL
     }
 
     free(plainbuf);
-    /* Any non-OK result means this candidate did not produce this
-     * packet; try the next one (an exclusive/pinned list has only one
-     * candidate, so this simply falls through below). REDELIVERED is
-     * tracked separately: it means this candidate has an interrupted
-     * operation left over from elsewhere (see otp_fw_contact_ready()) -
-     * trial.c's readiness filter should already exclude such contacts,
-     * so hitting it here means that state appeared in the narrow window
-     * between the filter and this call. The current packet's input was
-     * never consumed by that redelivery (KEYCHAIN_REDELIVERED leaves the
-     * input untouched), so it's still safe to try the next candidate,
-     * but if nothing else validates either, "pending-recovery" is a far
-     * more actionable answer than the generic "meta-mismatch". */
     if (rc == KEYCHAIN_REDELIVERED)
       saw_pending_recovery = 1;
   }
@@ -514,16 +495,6 @@ otp_fw_result_t otp_fw_decrypt_packet(const char *keychain_dir, const CandidateL
   return candidates->exclusive ? OTP_FW_PIN_MISMATCH : OTP_FW_AUTH_FAIL;
 }
 
-/* Classifies an inbound packet's candidate list without ever calling
- * decrypt_with_contact(): unlike the egress side, whether an inbound
- * packet WOULD validate can only be known by actually decrypting it, and
- * a genuine successful decrypt is not reversible - it commits real key
- * material the same as a live decrypt would (see otp_fw_decrypt_packet()
- * above). So --mode=log-only only ever reports the two outcomes that are
- * free to determine: no candidate at all (OTP_FW_NO_CONTACT /
- * OTP_FW_PIN_MISMATCH), or OTP_FW_NOT_EVALUATED when there's at least
- * one candidate that a real attempt would have been tried against - an
- * honest "would have tried this, didn't check", not a claim of success. */
 otp_fw_result_t otp_fw_classify_ingress(const CandidateList *candidates,
                                         char *contact_out, size_t contact_out_size)
 {

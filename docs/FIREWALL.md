@@ -1,9 +1,23 @@
 # OTP Firewall
 
+## Index
+
+1. [What is OTP Firewall](#what-is-otp-firewall)
+2. Linux Kernel Module
+   - [How it works (Linux)](#how-it-works-linux)
+   - [How to install/use it (Linux)](#how-to-installuse-it-linux)
+   - [Technical details (Linux)](#technical-details-linux)
+3. macOS Kernel Module
+   - [How it works (macOS)](#how-it-works-macos)
+   - [How to install/use it (macOS)](#how-to-installuse-it-macos)
+   - [Technical details (macOS)](#technical-details-macos)
+
 ## What is OTP Firewall
 
-OTP Firewall is a system-wide network firewall for Linux, built on top of
-otp-toolkit's one-time-pad keychain. Once active, it blocks all incoming and
+OTP Firewall is a system-wide network firewall, built on top of
+otp-toolkit's one-time-pad keychain, available on **Linux**
+(`firewall/linux-kernel-module/` + `firewall/daemon/`) and **macOS**
+(`firewall/macos-kernel-module/`). Once active, it blocks all incoming and
 outgoing network traffic by default, and only allows traffic to and from the
 contacts in your keychain. There's no separate password, certificate, or
 shared secret to set up — the same one-time-pad keys you already use with the
@@ -19,21 +33,35 @@ In short:
   on) don't need to know anything changed. Traffic to and from your contacts
   keeps working normally; everything else is silently dropped.
 
-It's made of two parts working together: a small kernel module that
-intercepts network traffic, and a background service (a "daemon") that does
-the actual encryption, decryption, and decision-making. Both are covered in
-more detail below.
+Both platforms share the same core logic — the same `cipher.c`/`keychain.c`/
+`commit.c` crypto library unmodified, and the same packet-parsing/config/pin/
+trial-ordering code in `firewall/daemon/` reused directly by both — with a
+thin, platform-specific layer on top doing the actual traffic interception
+(a kernel module on Linux, a System Extension on macOS). The sections below
+are split by platform because that interception layer — and therefore how you
+install, run, and control it — genuinely differs between them; the underlying
+protocol behavior (what gets encrypted, how a packet is authenticated, what
+gets logged and why) is identical either way.
 
-## How it works
+**Maturity differs sharply between the two.** The Linux side has been built,
+compiled, and unit-tested (`firewall/linux-kernel-module/tests/`, 4,273
+checks) — though its kernel module specifically has still never been loaded
+on a real machine. The macOS side has never been compiled at all (written
+without access to Xcode or a macOS SDK) and carries real open architecture
+questions, not just unverified API calls — see
+["Technical details (macOS)"](#technical-details-macos) for specifics before
+relying on it for anything.
+
+## How it works (Linux)
 
 ### Outgoing traffic
 
 When your computer sends a packet to an address that's mapped to one of your
-contacts (see "How to install/use it" below), the firewall encrypts that
-packet's contents using your one-time-pad key for that contact before it
-leaves your machine. The packet keeps its original source, destination, and
-port — only its contents change. Traffic to any address that isn't mapped to
-a contact is dropped outright.
+contacts (see ["How to install/use it (Linux)"](#how-to-installuse-it-linux)
+below), the firewall encrypts that packet's contents using your one-time-pad
+key for that contact before it leaves your machine. The packet keeps its
+original source, destination, and port — only its contents change. Traffic to
+any address that isn't mapped to a contact is dropped outright.
 
 ### Incoming traffic
 
@@ -91,7 +119,7 @@ firewall always allows that protocol through untouched, since it carries no
 application data to authenticate, and blocking it would break IPv6 entirely.
 Everything else that isn't ordinary TCP or UDP traffic is blocked.
 
-## How to install/use it
+## How to install/use it (Linux)
 
 ### 1. Install the kernel headers
 
@@ -210,7 +238,7 @@ sudo rmmod otp_firewall
 This unloads the kernel module (which also turns enforcement off). Then stop
 `otp-firewalld` however you started it (`Ctrl-C`, `systemctl stop`, etc.).
 
-## Technical details
+## Technical details (Linux)
 
 ### Architecture
 
@@ -249,8 +277,8 @@ The firewall has two parts:
 ```
 
 Only TCP and UDP traffic is affected. Every other protocol is blocked, except
-IPv6's Neighbor Discovery traffic (see "How it works"), which always passes
-through untouched.
+IPv6's Neighbor Discovery traffic (see ["How it works
+(Linux)"](#how-it-works-linux)), which always passes through untouched.
 
 Advanced: the kernel module and the daemon communicate over a pair of
 numbered queues (0 for outgoing, 1 for incoming, by default). If you need to
@@ -264,7 +292,7 @@ matching `queue_egress=`/`queue_ingress=` module parameters to `insmod` and
 |---|---|
 | `~/.otp/firewall_keychain/` | The firewall's own keychain (separate from any keychain you use elsewhere) |
 | `~/.otp/.keychain` | Internal link to `firewall_keychain` — this is what lets you manage firewall contacts with the ordinary `otp` command by running it from inside `~/.otp` |
-| `~/.otp/firewall.config` | Contact → address mapping (see "How to install/use it") |
+| `~/.otp/firewall.config` | Contact → address mapping (see ["How to install/use it (Linux)"](#how-to-installuse-it-linux)) |
 | `~/.otp/authorized.log` | One line per packet that was let through |
 | `~/.otp/restricted.log` | One line per packet that was blocked |
 
@@ -311,5 +339,269 @@ connection — only the two firewalls involved ever see the grown form.
 - **IPv6 extension headers** aren't inspected; packets using them are blocked
   rather than potentially misread.
 - **Packet reordering** causes a genuinely valid packet to be rejected if it
-  arrives out of order (see "How it works" above) — expected behavior, not a
-  malfunction.
+  arrives out of order (see ["How it works (Linux)"](#how-it-works-linux)
+  above) — expected behavior, not a malfunction.
+
+## How it works (macOS)
+
+The protocol itself — what's authenticated, what's encrypted, what gets
+logged and why — is identical to the [Linux version](#how-it-works-linux):
+same trial-decryption order (pinned contact → configured contact → the rest
+of the keychain), same "every packet checked individually" tradeoff, same
+key-consumption behavior, same IPv6 handling. What differs is the mechanics
+of how traffic reaches that logic, because there's no kernel-level piece on
+macOS the way there is on Linux:
+
+- **No fast in-kernel prefilter.** Linux's kernel module drops obviously
+  irrelevant traffic before it ever reaches the daemon. macOS has no
+  equivalent: a System Extension running `NEPacketTunnelProvider` (see
+  ["Technical details (macOS)"](#technical-details-macos) for why this
+  instead of a kernel extension) captures traffic by presenting itself as a
+  virtual network interface and being set as the default route — every
+  packet that reaches it goes through the full trial-decryption logic
+  directly, with no cheap pre-check ahead of it.
+- **No separate kernel-vs-userspace split.** On Linux, packet interception
+  (kernel module) and the actual crypto/decision-making (`otp-firewalld`)
+  are two different processes talking over NFQUEUE. On macOS both live in
+  one process — the System Extension.
+- **Outgoing packets need an explicit re-transmit step.** Apple's tunnel API
+  has no "accept this outbound packet, possibly modified, and let it
+  continue to the network" primitive — only "inject this packet as if it
+  had just arrived from the network." An approved outbound packet (grown
+  and encrypted, or passed through unchanged in log-only mode) is put on
+  the wire with a raw IP socket instead. See ["Technical details
+  (macOS)"](#technical-details-macos) for why this specific piece is the
+  least-confident part of the whole port.
+- **Whether unsolicited inbound connections are even visible to this
+  design at all is genuinely unverified** — not just an unconfirmed API
+  detail, but an open architecture question. `NEPacketTunnelProvider` is
+  shaped around the VPN-client model (your traffic goes into the tunnel,
+  reaches a remote endpoint, replies come back through the same tunnel). If
+  it turns out unsolicited inbound traffic — someone connecting *to* this
+  Mac, not a reply to something it sent — never reaches the virtual
+  interface at all, this design protects outbound-initiated traffic and its
+  replies, but not something like an inbound SSH connection to a service
+  running on this Mac. This needs to be established on a real Mac before
+  relying on it for anything.
+
+## How to install/use it (macOS)
+
+**This has never been built.** Written without access to Xcode, a macOS SDK,
+or any Apple toolchain — see ["Technical details
+(macOS)"](#technical-details-macos) for exactly what is and isn't verified
+before following these steps.
+
+### 1. Prerequisites
+
+An Apple Developer Program membership (required for the NetworkExtension
+entitlement and code signing — this doesn't work unsigned or with a free
+account), and Xcode.
+
+### 2. Create the Xcode project
+
+No `.xcodeproj` is included in this repository — hand-generating Xcode's
+project file format correctly, unverified, seemed more likely to produce
+something that fails to open than something useful. Create the project shell
+yourself:
+
+1. In the Apple Developer portal, enable the **Network Extensions**
+   capability for both an App ID (the host app) and a second App ID (the
+   extension, typically `<app-id>.Extension`).
+2. In Xcode: **File > New > Project > App**, then **File > New > Target >
+   Network Extension** (choose Packet Tunnel) to add the extension target,
+   embedded in the app.
+3. Add the reused `firewall/daemon/*` files — `common.h`, `checksum.h`/`.c`,
+   `config.h`/`.c`, `pin.h`/`.c`, `trial.h`/`.c`, `keychain_setup.h`/`.c`,
+   `log.h`/`.c`, `packet_codec.h` (just the header) — plus everything in
+   `firewall/macos-kernel-module/Shared/` and `Extension/`, to the extension
+   target. Compile `Shared/packet_codec_macos.c` **instead of**
+   `firewall/daemon/packet_codec.c` (same public API, macOS-native BSD
+   struct field names instead of Linux/glibc ones). Add
+   `firewall/macos-kernel-module/App/*` to the app target.
+4. Set the extension target's **Objective-C Bridging Header** build setting
+   to `OTPFirewallExtension-Bridging-Header.h`.
+5. Set both targets' entitlements file (Signing & Capabilities) to the
+   `.entitlements` files provided, and enable the Network Extensions
+   capability with the matching provider type in each target's Signing &
+   Capabilities tab.
+6. Update `OTPFirewallController.extensionBundleID` in
+   `App/OTPFirewallApp.swift` to match your actual extension target's bundle
+   identifier.
+
+### 3. Set up your contacts and configuration
+
+Identical to Linux: same files, same format, same location, since
+`otp_fw_setup_keychain_dir()`/`config.c`/`log.c` are the exact same
+unmodified POSIX code on both platforms. See steps 3–4 of ["How to
+install/use it (Linux)"](#how-to-installuse-it-linux) — `~/.otp/firewall_keychain/`,
+`~/.otp/firewall.config`, `cd ~/.otp && otp -ac ...` all work the same way.
+
+### 4. Build, activate, and run
+
+Build and run the host app in Xcode, then click through activation. macOS
+will prompt for approval in **System Settings > Privacy & Security > Login
+Items & Extensions** — this is a real, user-visible OS prompt, not something
+that can be scripted around. The sample app's Toggle chooses log-only vs.
+enforce mode before you press Start; unlike the Linux side, activating the
+extension and starting the tunnel are close together in this design, so
+there's no separate "loaded but disabled" state — see ["Technical details
+(macOS)"](#technical-details-macos) for what that means for a kill switch.
+
+### 5. Removing it
+
+Press Stop in the app (calls `stopVPNTunnel()`), then remove the extension's
+approval in System Settings if you want it fully uninstalled.
+
+## Technical details (macOS)
+
+### This is not a kernel module
+
+There is no current, Apple-sanctioned kernel-module equivalent for network
+filtering on macOS. The old mechanism (KEXTs / Network Kernel Extensions) is
+deprecated, barely functional on Apple Silicon without disabling core
+security features (Reduced Security mode via the Startup Security Utility in
+Recovery), and could stop being loadable at all in a future release.
+
+What `firewall/macos-kernel-module/` actually contains is a **System
+Extension** running `NEPacketTunnelProvider` (part of
+`NetworkExtension.framework`) — the current Apple-recommended way to
+intercept and control network traffic. It runs in **userspace**, not kernel
+space, with elevated networking privileges granted through code-signing
+entitlements and (usually) explicit user approval in System Settings, not
+through kernel privilege. The directory is still named `macos-kernel-module`
+to mirror `linux-kernel-module` structurally — think of it as "the piece
+that plays the same role," not "the piece with the same privilege level."
+
+### What's verified and what isn't
+
+**Nothing in `firewall/macos-kernel-module/` has been compiled, signed, or
+run.** It was written in a Linux sandbox with no Xcode, no macOS SDK, no
+Swift or Objective-C toolchain, and no way to check any of it against real
+Apple headers or documentation. Compare this to the Linux kernel module,
+which was at least reasoned about from long-stable, extremely well-documented
+kernel APIs — here the uncertainty is broader and includes some genuinely
+load-bearing architecture questions, not just API-name nitpicks. In
+descending order of how much they matter:
+
+1. **Whether `NEPacketTunnelProvider` sees genuinely inbound (server-side)
+   connections at all** — see ["How it works (macOS)"](#how-it-works-macos)
+   above. The single biggest open question.
+2. **`otp_fw_bridge_send_raw()`'s raw-socket approach** for actually
+   transmitting an approved outbound packet: `NEPacketTunnelFlow` has no
+   "accept this outbound packet, possibly modified" primitive, only an
+   "inject as received" one. A raw IP socket with `IP_HDRINCL` (IPv4) /
+   `IPV6_HDRINCL` (IPv6) sending the exact bytes already constructed is the
+   mechanism used, but whether a System Extension's sandbox permits opening
+   a raw socket at all, and whether the IPv6 header-inclusion path works the
+   way IPv4's does, are both unconfirmed. See the extended comment on that
+   function in `Extension/OTPFirewallBridge.h`.
+3. **Exact Swift API surface** in `Extension/OTPFirewallProvider.swift` —
+   method names like `readPacketObjects`/`writePacketObjects`, and
+   `NEPacket.direction`/`.protocolFamily`'s exact types. See the confidence
+   notes at the top of that file.
+4. Everything in `Shared/packet_codec_macos.c` (the BSD header struct field
+   names — `struct ip`'s `ip_hl`/`ip_p`, `struct tcphdr`'s
+   `th_sport`/`th_off`, `struct udphdr`'s `uh_sport`/`uh_ulen`) is
+   well-established, decades-stable BSD sockets API — this is the part of
+   the whole port with the **highest** confidence, on par with the Linux
+   kernel module's netfilter API usage.
+
+Treat this the same way as the Linux kernel module before it was ever built:
+a careful, best-effort starting point, not a working deliverable.
+
+### Architecture
+
+```
+                         ┌────────────────────────────────────────┐
+                         │   OTPFirewallExtension  (System         │
+                         │   Extension, userspace)                 │
+                         │                                        │
+                         │  NEPacketTunnelProvider set as the      │
+                         │  default route - captures all outgoing  │
+                         │  traffic and (if reached at all - see   │
+                         │  the open question above) incoming      │
+                         │                                        │
+  outgoing packet ───────►  ICMPv6? ─ yes ──► pass through as-is  │
+                         │     │ no                                │
+                         │     ▼                                   │
+                         │  encrypt for the matched contact, or    │
+                         │  block if none is matched - then a raw  │
+                         │  IP socket puts it on the wire           │
+                         │                                        │
+  incoming packet ───────►  ICMPv6? ─ yes ──► pass through as-is  │
+                         │     │ no                                │
+                         │     ▼                                   │
+                         │  try to decrypt against your contacts'  │
+                         │  keys; on success, inject back into the │
+                         │  local stack via packetFlow, otherwise   │
+                         │  block                                  │
+                         └────────────────────────────────────────┘
+```
+
+Unlike the Linux side, there is no separate fast-path prefilter ahead of this
+— every packet that reaches the tunnel goes through the logic above directly.
+
+### What's reused unmodified vs. what's new
+
+`cipher.c`/`keychain.c`/`commit.c` (the actual OTP crypto/keychain library)
+need **zero changes** — `src/compat.h` branches purely on `_WIN32` vs. real
+POSIX, and macOS is genuine POSIX (BSD-derived), so these compile in exactly
+as they do on Linux.
+
+Of `firewall/daemon/`'s own files, everything is pure POSIX C with no
+Linux-specific dependencies **except** `packet_codec.c` (which uses
+Linux/glibc struct field names directly). So the Xcode project references
+`common.h`, `checksum.h`/`.c`, `config.h`/`.c`, `pin.h`/`.c`, `trial.h`/`.c`,
+`keychain_setup.h`/`.c`, `log.h`/`.c`, and `packet_codec.h` (just the header)
+**directly, by reference, unmodified**, and compiles
+`firewall/macos-kernel-module/Shared/packet_codec_macos.c` **instead of**
+`firewall/daemon/packet_codec.c` — same public API, BSD header field names.
+
+New for macOS, all under `firewall/macos-kernel-module/`:
+
+- `Extension/OTPFirewallBridge.h`/`.c` — the C↔Swift bridge; the macOS analog
+  of `firewall/daemon/main.c`'s NFQUEUE callbacks, minus the NFQUEUE-specific
+  parts (there's no separate kernel piece here to hand a verdict back to).
+  Also where the ICMPv6 exemption lives (`otp_fw_bridge_is_icmpv6()`),
+  mirroring `firewall/linux-kernel-module/otp_firewall.c`'s
+  `otp_fw_is_icmpv6()`.
+- `Extension/OTPFirewallProvider.swift` — the actual `NEPacketTunnelProvider`
+  subclass.
+- `Extension/Info.plist`, `Extension/OTPFirewallExtension.entitlements`,
+  `Extension/OTPFirewallExtension-Bridging-Header.h`
+- `App/*` — a minimal host app that activates the extension and
+  starts/stops enforcement. Not a real settings UI.
+
+There is **no macOS analog of `kernel_ctl.c`**: on macOS there's no separate
+kernel-side process to push a candidate list to.
+
+### File locations
+
+Identical to [Linux](#file-locations) — `~/.otp/firewall_keychain/`,
+`~/.otp/.keychain`, `~/.otp/firewall.config`, `~/.otp/authorized.log`,
+`~/.otp/restricted.log` — since the code that reads and writes them is the
+same unmodified POSIX code on both platforms.
+
+### Log format
+
+Identical to [Linux](#log-format) — same line format, same `reason` values.
+
+### Known gaps beyond the "what's verified" list above
+
+- **No kill switch equivalent to the Linux side's
+  `/proc/otp_firewall/enabled`.** Stopping enforcement means calling
+  `stopVPNTunnel()` (or the Stop button in the sample app) — there's no
+  separate "loaded but disabled" state the way `insmod`-without-`echo 1`
+  gives you on Linux, since activating the extension and starting the
+  tunnel are close together in this design.
+- **IPv6 extension headers, IP fragmentation**: same v1 scope limits as the
+  Linux side (see ["Limitations"](#limitations)), not specifically
+  re-verified for the BSD parsing path here.
+- **No equivalent of the Linux daemon's test suite.**
+  `firewall/linux-kernel-module/tests/` builds and runs against a real
+  POSIX toolchain; nothing on the macOS side has been exercised the same
+  way, because there's no way to build or run Swift/Xcode-project code from
+  the environment this was written in at all.
+- **No independent code review.** The Linux side has been through four
+  rounds of independent review with real bugs found and fixed each time;
+  the macOS port hasn't been reviewed at all yet.

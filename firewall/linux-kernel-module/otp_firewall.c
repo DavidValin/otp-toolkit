@@ -277,7 +277,18 @@ static ssize_t candidates_write(struct file *f, const char __user *buf, size_t c
   (void)f;
   (void)ppos;
   if (count == 0)
+  {
+    /* An explicit zero-length write is how the daemon clears the table
+     * back to empty (e.g. the last configured contact was just
+     * removed) - treating it as a no-op here would mean the table could
+     * never be cleared once anything had ever been pushed to it, and
+     * the kernel would keep queuing packets for IPs nothing configures
+     * anymore. */
+    write_lock_bh(&g_candidates_lock);
+    g_candidate_count = 0;
+    write_unlock_bh(&g_candidates_lock);
     return 0;
+  }
   /* Sized to cover the daemon's own worst case (OTP_FW_MAX_CONFIG_ENTRIES
    * unique IPs, each up to OTP_FW_IPSTR_LEN+1 bytes as text - up to
    * ~1.9MB), with headroom, rather than an arbitrary round number: a cap

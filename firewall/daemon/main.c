@@ -188,29 +188,79 @@ static int ingress_cb(struct nfq_q_handle *qh, struct nfgenmsg *nfmsg,
   return emit_verdict(qh, id, ctx->mode == OTP_FW_MODE_LOGONLY, NULL, 0);
 }
 
-/* A pin only gets invalidated here when the config now EXPLICITLY maps
- * its IP to a different contact - an IP simply absent from the config
- * (e.g. one that was only ever reached via the fallback keychain scan)
- * must keep its pin, per docs/FIREWALL.md's "Trial-decryption order". */
+/* A pin is invalidated here either because its contact no longer exists
+ * in the (freshly reloaded, see reload_config_and_push()) keychain, or
+ * because the config now EXPLICITLY maps its IP to a different contact -
+ * an IP simply absent from the config (e.g. one that was only ever
+ * reached via the fallback keychain scan) must keep its pin, per
+ * docs/FIREWALL.md's "Trial-decryption order". */
 static void reconcile_pins_with_config(FwContext *ctx)
 {
   for (int i = 0; i < ctx->pins.count; i++)
   {
     char ip[OTP_FW_IPSTR_LEN];
+    char contact[MAX_NAME_LENGTH];
     snprintf(ip, sizeof(ip), "%s", ctx->pins.entries[i].ip);
-    const char *configured = fwconfig_contact_for_ip(&ctx->cfg, ip);
-    if (configured && strcmp(configured, ctx->pins.entries[i].contact) != 0)
+    snprintf(contact, sizeof(contact), "%s", ctx->pins.entries[i].contact);
+
+    if (!find_contact(contact))
     {
       pin_clear_ip(&ctx->pins, ip);
       i--; /* pin_clear_ip swaps the last entry into this slot */
+      continue;
+    }
+
+    const char *configured = fwconfig_contact_for_ip(&ctx->cfg, ip);
+    if (configured && strcmp(configured, contact) != 0)
+    {
+      pin_clear_ip(&ctx->pins, ip);
+      i--;
     }
   }
 }
 
 static void reload_config_and_push(FwContext *ctx, const char *config_path)
 {
-  fwconfig_load(config_path, &ctx->cfg);
-  fwconfig_resolve(&ctx->cfg);
+  /* load_keychain() fully rebuilds g_keychain from the .meta files
+   * currently on disk (see src/keychain.c), so this is what actually
+   * picks up contacts added or removed since startup. Without it, a
+   * newly added contact stays invisible to find_contact() - and
+   * therefore rejected - until some OTHER contact's traffic happens to
+   * trigger cipher.c's own internal load_keychain() call as a side
+   * effect of encrypt_with_contact()/decrypt_with_contact(); with no
+   * other contact's traffic ever arriving, that could be never.
+   *
+   * On failure, src/keychain.c's own load_keychain() has ALREADY wiped
+   * g_keychain to empty (cleanup_keychain()+init_keychain() run
+   * unconditionally before the failure point - e.g. get_keychain_dir()'s
+   * unconditional mkdir() hitting a transient EROFS/ENOSPC/permission
+   * change) - that's not just "new contacts not reflected", it's every
+   * existing contact gone from memory until the next successful reload,
+   * which would in turn make reconcile_pins_with_config() below read
+   * that empty keychain as "every pinned contact was removed" and clear
+   * every pin. Since the core library offers no "restore previous state
+   * on failure" the way fwconfig_load() was fixed to do, this snapshots
+   * g_keychain here (static: ~13MB, too large for a stack local, but a
+   * plain struct copy with no pointers inside Contact - cheap enough,
+   * sub-millisecond, to do on every reload regardless of whether this
+   * one actually fails) and restores it on failure instead. */
+  static Keychain keychain_snapshot;
+  keychain_snapshot = g_keychain;
+  int keychain_ok = (load_keychain() == 0);
+  if (!keychain_ok)
+  {
+    fprintf(stderr, "Warning: failed to reload keychain - keeping the previous in-memory state\n");
+    g_keychain = keychain_snapshot;
+  }
+
+  int config_ok = (fwconfig_load(config_path, &ctx->cfg) == 0);
+  if (config_ok)
+    /* Only re-resolve when the config actually (potentially) changed:
+     * fwconfig_load() restores the previous, already-resolved config on
+     * failure, so re-resolving it again here would just be a repeated,
+     * synchronous getaddrinfo() pass (real latency on a DNS timeout,
+     * not just wasted traffic) over entries that are known unchanged. */
+    fwconfig_resolve(&ctx->cfg);
   reconcile_pins_with_config(ctx);
   otp_fw_kernel_push_candidates(&ctx->cfg);
 }
@@ -218,8 +268,8 @@ static void reload_config_and_push(FwContext *ctx, const char *config_path)
 static void usage(const char *argv0)
 {
   fprintf(stderr,
-         "Usage: %s [--mode=enforce|log-only] [--config PATH]\n"
-         "          [--queue-egress N] [--queue-ingress N] [--resolve-interval SECONDS]\n",
+         "Usage: %s [--mode=enforce|log-only] [--config=PATH]\n"
+         "          [--queue-egress=N] [--queue-ingress=N] [--resolve-interval=SECONDS]\n",
          argv0);
 }
 
@@ -344,6 +394,24 @@ int main(int argc, char **argv)
 
   while (!g_shutdown)
   {
+    /* Checked unconditionally at the top of every iteration, not only
+     * inside the EINTR branch below: under sustained packet traffic,
+     * recv() keeps finding data ready and returns normally rather than
+     * blocking, so a SIGALRM that lands while nfq_handle_packet() (or
+     * anything else) is running sets g_resolve_due but recv() is never
+     * actually interrupted - the EINTR branch, and the alarm()
+     * re-arming that used to live only inside it, would then never run
+     * again for the rest of the process's life. Checking here instead
+     * catches it on the very next iteration regardless of which path
+     * got us back to the top of the loop. */
+    if (g_resolve_due)
+    {
+      g_resolve_due = 0;
+      reload_config_and_push(&ctx, config_path);
+      if (resolve_interval > 0)
+        alarm((unsigned)resolve_interval);
+    }
+
     ssize_t n = recv(fd, buf, sizeof(buf), 0);
     if (n >= 0)
     {
@@ -352,13 +420,6 @@ int main(int argc, char **argv)
     }
     if (errno == EINTR)
     {
-      if (g_resolve_due)
-      {
-        g_resolve_due = 0;
-        reload_config_and_push(&ctx, config_path);
-        if (resolve_interval > 0)
-          alarm((unsigned)resolve_interval);
-      }
       continue;
     }
     if (errno == ENOBUFS)

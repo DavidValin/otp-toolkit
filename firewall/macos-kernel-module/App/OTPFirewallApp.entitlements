@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Required for the host app to install/activate the embedded
+	     system extension via OSSystemExtensionManager. -->
+	<key>com.apple.developer.system-extension.install</key>
+	<true/>
+	<!-- Required to create/save/start a NETunnelProviderManager
+	     configuration pointing at the extension. -->
+	<key>com.apple.developer.networking.networkextension</key>
+	<array>
+		<string>packet-tunnel-provider</string>
+	</array>
+</dict>
+</plist>
