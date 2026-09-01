@@ -21,7 +21,7 @@ ifeq ($(VERSION),)
   VERSION := (unknown version)
 endif
 
-.PHONY: build test install
+.PHONY: build test install firewall-daemon firewall-kmod install-firewall
 
 build:
 	@echo
@@ -75,6 +75,43 @@ musl:
 	@echo " - Testing..."
 	@sh test/report.sh || { rm -f $(BIN); exit 1; }
 	@echo " - Tested!"
+	@echo
+
+# OTP_FIREWALL_PROTOCOL - see docs/FIREWALL.md. Separate from the targets
+# above: building/installing the firewall never affects the plain otp CLI.
+FIREWALL_BIN := bin/otp-firewalld
+
+firewall-daemon:
+	@echo
+	@echo " - Building otp-firewalld..."
+	@mkdir -p bin
+	@$(CC) $(BUILD_FLAGS) -Isrc -o $(FIREWALL_BIN) \
+		firewall/daemon/main.c firewall/daemon/config.c firewall/daemon/pin.c \
+		firewall/daemon/trial.c firewall/daemon/packet_codec.c firewall/daemon/checksum.c \
+		firewall/daemon/log.c firewall/daemon/kernel_ctl.c firewall/daemon/keychain_setup.c \
+		src/cipher.c src/keychain.c src/commit.c \
+		$$(pkg-config --cflags --libs libnetfilter_queue) || exit 1
+	@echo " - Built $(FIREWALL_BIN)!"
+	@echo
+
+firewall-kmod:
+	@echo
+	@echo " - Building otp_firewall.ko (needs the running kernel's headers installed)..."
+	@$(MAKE) -C /lib/modules/$$(uname -r)/build M=$$(pwd)/firewall/linux-kernel-module modules
+	@echo
+
+install-firewall: firewall-daemon firewall-kmod
+	@if [ ! -f $(FIREWALL_BIN) ]; then \
+		echo "Error: $(FIREWALL_BIN) not found - run 'make firewall-daemon' first"; \
+		exit 1; \
+	fi
+	@echo
+	@echo " - Installing otp-firewalld..."
+	@mv $(FIREWALL_BIN) /usr/local/bin/otp-firewalld
+	@echo " - Installed! Load the kernel module with:"
+	@echo "     sudo insmod firewall/linux-kernel-module/otp_firewall.ko"
+	@echo "   then run 'sudo otp-firewalld' - see docs/FIREWALL.md for the kill switch,"
+	@echo "   log-only rollout mode, and firewall.config format."
 	@echo
 
 mingw:
