@@ -6,3 +6,14 @@ test_*
 !test_*.c
 test-report.html
 .task-worktrees
+
+# Kbuild artifacts from building firewall/linux-kernel-module/otp_firewall.ko
+firewall/linux-kernel-module/*.o
+firewall/linux-kernel-module/*.ko
+firewall/linux-kernel-module/*.mod
+firewall/linux-kernel-module/*.mod.c
+firewall/linux-kernel-module/*.mod.o
+firewall/linux-kernel-module/*.symvers
+firewall/linux-kernel-module/modules.order
+firewall/linux-kernel-module/.*.cmd
+firewall/linux-kernel-module/.tmp_versions/

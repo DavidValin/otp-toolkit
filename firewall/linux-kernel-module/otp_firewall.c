@@ -198,9 +198,9 @@ static int otp_fw_is_ack_port(struct sk_buff *skb)
 }
 
 /* dir_egress: 1 to extract the destination address (outbound hook), 0
- * for the source address (inbound hook). Returns 1 with *family/*v4/*v6
- * filled for a parsable TCP/UDP IPv4/IPv6 packet, 0 otherwise (caller
- * drops - see the module-level comment on v1 scope). */
+ * for the source address (inbound hook). Returns 1 with *family, *v4,
+ * and *v6 filled for a parsable TCP/UDP IPv4/IPv6 packet, 0 otherwise
+ * (caller drops - see the module-level comment on v1 scope). */
 static int otp_fw_extract(struct sk_buff *skb, int dir_egress, u8 *family,
                           __be32 *v4, struct in6_addr *v6)
 {
