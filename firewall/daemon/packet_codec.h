@@ -72,4 +72,14 @@ int otp_fw_describe_packet(const unsigned char *pkt, int pkt_len,
                            char *dst_ip, size_t dst_ip_size, unsigned *dst_port,
                            const char **proto_name);
 
+/* Parses just enough of `pkt` to return the combined IP+L4 header
+ * length (everything before the L4 payload) - the same header bytes
+ * otp_fw_encrypt_packet() copies verbatim into its output unchanged
+ * (only the payload grows). Used by ack.h's delivery-acknowledgment
+ * tracking to capture a packet's header for later retry reconstruction
+ * without needing its own copy of the parser. Returns the header
+ * length (> 0) on success, -1 if `pkt` doesn't parse as IPv4/IPv6
+ * TCP/UDP. */
+int otp_fw_header_length(const unsigned char *pkt, int pkt_len);
+
 #endif /* OTP_FW_PACKET_CODEC_H */

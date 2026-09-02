@@ -89,6 +89,7 @@ firewall-daemon:
 		firewall/daemon/main.c firewall/daemon/config.c firewall/daemon/pin.c \
 		firewall/daemon/trial.c firewall/daemon/packet_codec.c firewall/daemon/checksum.c \
 		firewall/daemon/log.c firewall/daemon/kernel_ctl.c firewall/daemon/keychain_setup.c \
+		firewall/daemon/ack.c \
 		src/cipher.c src/keychain.c src/commit.c \
 		$$(pkg-config --cflags --libs libnetfilter_queue) || exit 1
 	@echo " - Built $(FIREWALL_BIN)!"

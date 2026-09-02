@@ -60,6 +60,20 @@ headers or documentation. In descending order of how much it matters:
    before returning `OTP_FW_KEY_EXHAUSTED`/`OTP_FW_PENDING_RECOVERY`, so
    a `restricted.log` entry for an exhausted or pending-recovery contact
    logged `-` instead of the contact's name.
+5. **`ack.h`/`.c`** (the delivery-acknowledgment mechanism - see
+   [`../README.md`'s "Delivery acknowledgment"](../README.md#delivery-acknowledgment))
+   is reused completely unmodified from `firewall/daemon/`, same as
+   `pin.c`/`config.c` - it's plain POSIX sockets code with no
+   platform-specific branches, and its table logic — including
+   crash/restart recovery via `ack_recover_outstanding()`, exercised with
+   the real `otp` library, not mocks — is covered by
+   `firewall/linux-kernel-module/tests/test_ack.c` (10,000+ checks
+   passing as part of the Linux daemon's own test suite). What's
+   specifically unverified here is only the macOS-side wiring around it:
+   whether the ack socket genuinely rides outside the tunnel's capture
+   scope the way `otp_fw_bridge_send_raw()` already has to (point 2
+   above), and the Swift `DispatchSourceTimer` calling
+   `otp_fw_bridge_ack_tick()`.
 
 Treat this as a careful, best-effort starting point, not a working
 deliverable.
@@ -108,7 +122,9 @@ Of `firewall/daemon/`'s own files, everything is pure POSIX C **except**
 Xcode project references these files **directly, by reference, unmodified**:
 
 - `common.h`, `checksum.h`/`.c`, `config.h`/`.c`, `pin.h`/`.c`,
-  `trial.h`/`.c`, `keychain_setup.h`/`.c`, `log.h`/`.c`,
+  `trial.h`/`.c`, `keychain_setup.h`/`.c`, `log.h`/`.c`, `ack.h`/`.c`
+  (the delivery-acknowledgment mechanism — see [`../README.md`'s
+  "Delivery acknowledgment"](../README.md#delivery-acknowledgment)),
   `packet_codec.h` (just the header — its declared API has no
   platform-specific types)
 
@@ -120,7 +136,13 @@ New for macOS, in this directory:
 
 - `Extension/OTPFirewallBridge.h`/`.c` — the C↔Swift bridge; where the
   actual encrypt/decrypt/candidate logic gets driven from Swift, and where
-  the ICMPv6 exemption lives (`otp_fw_bridge_is_icmpv6()`).
+  the ICMPv6 exemption lives (`otp_fw_bridge_is_icmpv6()`). Also drives
+  `ack.h`'s delivery-acknowledgment mechanism, via `otp_fw_bridge_ack_tick()`
+  (called from a Swift timer, see below) — unlike the other three
+  platforms, no kernel/driver-level port exemption is needed for this:
+  the ack socket is opened from within this same extension process, so
+  it rides outside `NEPacketTunnelProvider`'s own capture scope the same
+  way `otp_fw_bridge_send_raw()`'s raw-socket sends already have to.
 - `Extension/OTPFirewallProvider.swift` — the actual
   `NEPacketTunnelProvider` subclass.
 - `Extension/Info.plist`, `Extension/OTPFirewallExtension.entitlements`,

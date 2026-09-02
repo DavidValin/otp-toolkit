@@ -17,11 +17,11 @@ CORE := $(SRC)/cipher.c $(SRC)/keychain.c $(SRC)/commit.c
 
 .PHONY: test clean
 
-test: test_checksum test_pin test_config test_trial test_packet_codec
+test: test_checksum test_pin test_config test_trial test_packet_codec test_ack
 	@echo
 	@echo " - Running firewall daemon unit tests..."
 	@rc=0; \
-	for t in test_checksum test_pin test_config test_trial test_packet_codec; do \
+	for t in test_checksum test_pin test_config test_trial test_packet_codec test_ack; do \
 		./$$t || rc=1; \
 	done; \
 	echo; \
@@ -34,6 +34,9 @@ test_checksum: test_checksum.c $(DAEMON)/checksum.c
 test_pin: test_pin.c $(DAEMON)/pin.c
 	$(CC) $(CFLAGS) $(INCLUDES) -o $@ test_pin.c $(DAEMON)/pin.c
 
+test_ack: test_ack.c $(DAEMON)/ack.c $(DAEMON)/config.c $(CORE)
+	$(CC) $(CFLAGS) $(INCLUDES) -o $@ test_ack.c $(DAEMON)/ack.c $(DAEMON)/config.c $(CORE)
+
 test_config: test_config.c $(DAEMON)/config.c
 	$(CC) $(CFLAGS) $(INCLUDES) -o $@ test_config.c $(DAEMON)/config.c
 
@@ -45,5 +48,5 @@ test_packet_codec: test_packet_codec.c $(DAEMON)/packet_codec.c $(DAEMON)/checks
 		$(DAEMON)/config.c $(DAEMON)/trial.c $(DAEMON)/pin.c $(CORE)
 
 clean:
-	rm -f test_checksum test_pin test_config test_trial test_packet_codec
+	rm -f test_checksum test_pin test_config test_trial test_packet_codec test_ack
 	rm -rf /tmp/otp_fw_test_*

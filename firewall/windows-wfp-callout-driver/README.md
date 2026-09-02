@@ -62,10 +62,24 @@ descending order of how much the remaining uncertainty matters:
    (SCM service boilerplate, `DeviceIoControl`, `CreateFileA`). Medium-high
    confidence in the API usage itself; the genuinely new design point (not
    a portability risk, a real architecture decision) is that the service
-   needs two threads — a blocking `DeviceIoControl` call has no
-   signal-interrupt equivalent to lean on for periodic config reload — so
-   every access to the shared keychain/config state is serialized with an
-   explicit `CRITICAL_SECTION`.
+   needs three threads — a blocking `DeviceIoControl` call has no
+   signal-interrupt equivalent to lean on for periodic config reload or
+   for driving the delivery-ack mechanism (see below), so a dedicated
+   thread handles each, and every access to the shared keychain/config
+   state is serialized with an explicit `CRITICAL_SECTION`.
+6. **`ack.h`/`.c`** (the delivery-acknowledgment mechanism — see
+   [`../README.md`'s "Delivery acknowledgment"](../README.md#delivery-acknowledgment))
+   is reused completely unmodified from `firewall/daemon/` — its table
+   logic, including crash/restart recovery via `ack_recover_outstanding()`
+   (exercised with the real `otp` library, not mocks), is covered by
+   `firewall/linux-kernel-module/tests/test_ack.c` (10,000+ checks
+   passing as part of the Linux daemon's own test suite), and its
+   `_WIN32`-guarded WinSock socket calls (`ack_socket_open()`
+   etc.) follow the same patterns already established elsewhere in this
+   port. What's specifically unverified here is the Windows-side wiring
+   around it: the driver's ack-port exemption (item 2 above covers the
+   general WFP registration risk it shares) and `AckThreadProc`'s use of
+   WinSock's `select()`.
 
 Treat this as a careful, best-effort starting point that needs real WDK
 test-signing hardware and a kernel debugger to finish, not a working
@@ -105,7 +119,11 @@ service) and drops anything that obviously doesn't match without ever
 queuing it to userspace; anything that might be relevant is pended and
 handed to the service over `\\.\OTPFirewall` for the actual encrypt/decrypt
 decision. IPv6 Neighbor Discovery is exempted directly in the driver
-(`OtpFwIsIcmpv6()`) and never reaches the service at all.
+(`OtpFwIsIcmpv6()`) and never reaches the service at all - so is the
+service's own delivery-acknowledgment traffic (see [`../README.md`'s
+"Delivery acknowledgment"](../README.md#delivery-acknowledgment)), a
+small UDP side channel on a fixed port the driver's classify function
+lets through untouched in both directions.
 
 ## What's reused unmodified vs. what's new
 
@@ -121,9 +139,10 @@ build for Windows too — reused **directly, unmodified beyond those
 guards**:
 
 - `common.h`, `checksum.h`/`.c`, `config.h`/`.c`, `pin.h`/`.c`,
-  `trial.h`/`.c`, `keychain_setup.h`/`.c`, `log.h`/`.c`,
-  `packet_codec.h`, `kernel_ctl.h` (just the headers where only a `.c`
-  needed a platform-specific body)
+  `trial.h`/`.c`, `keychain_setup.h`/`.c`, `log.h`/`.c`, `ack.h`/`.c`
+  (the delivery-acknowledgment mechanism, including its `_WIN32`-guarded
+  WinSock socket calls), `packet_codec.h`, `kernel_ctl.h` (just the
+  headers where only a `.c` needed a platform-specific body)
 
 ...and compile **instead of** `firewall/daemon/packet_codec.c` and
 `firewall/daemon/kernel_ctl.c` respectively:
@@ -143,11 +162,14 @@ New for Windows, in this directory:
   `<stdint.h>`, so it compiles unchanged in kernel and usermode
   translation units).
 - `Driver/otp_firewall_driver.h`/`.c` — the WFP callout driver itself:
-  candidate-IP table, the kernel-side ICMPv6 exemption, the kill switch,
-  and the packet pend/queue/verdict machinery.
+  candidate-IP table, the kernel-side ICMPv6 and delivery-ack-port
+  exemptions, the kill switch, and the packet pend/queue/verdict
+  machinery.
 - `Service/otp_firewall_svc.c` — the userspace Windows Service: startup,
-  config/keychain reload, and the loop moving packets between the driver
-  and the codec/cipher/keychain code.
+  config/keychain reload, the loop moving packets between the driver
+  and the codec/cipher/keychain code, and a third thread
+  (`AckThreadProc`) driving `ack.h`'s delivery-acknowledgment mechanism
+  via WinSock's `select()`.
 - `Ctl/otpfwctl.c` — `otpfwctl.exe {enable|disable|status}`, the kill
   switch control utility (see "Deactivate" below).
 

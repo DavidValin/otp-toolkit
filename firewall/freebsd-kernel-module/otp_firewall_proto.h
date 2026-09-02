@@ -25,6 +25,15 @@
 #define OTP_FW_DEVICE_NAME "otp_firewall"
 #define OTP_FW_DEVICE_PATH "/dev/otp_firewall"
 
+/* Must match firewall/daemon/common.h's OTP_FW_ACK_PORT exactly - the
+ * daemon's delivery-acknowledgment side channel (see ack.h) needs this
+ * traffic exempted from the encrypt/decrypt pipeline here in the
+ * kernel, the same way ICMPv6 is, since neither this header nor the
+ * userspace one can include the other (kernel vs. userspace build) -
+ * same reasoning as the Linux module's own copy of this constant in
+ * otp_firewall.h. */
+#define OTP_FW_ACK_PORT 34443
+
 /* Comfortably covers the largest possible IP packet (65535 bytes for
  * IPv6 payload + a 40-byte fixed header) plus OTP growth headroom, same
  * reasoning as OTP_FW_PACKET_BUF_CAP on Linux and OTP_FW_MAX_PACKET on
@@ -35,7 +44,7 @@
  * the Windows driver's OTP_FW_WIRE_MAX_CANDIDATES: a generous static
  * cap on how many contact IPs the daemon can push in one
  * OTP_FW_IOC_SET_CANDIDATES call. */
-#define OTP_FW_MAX_CANDIDATES 65536
+#define OTP_FW_WIRE_MAX_CANDIDATES 65536
 
 typedef enum
 {
@@ -85,7 +94,7 @@ typedef struct
  * argument size is encoded in the command itself (via _IOW's sizeof()),
  * which can't express "however many candidates the caller has right
  * now" as a compile-time constant without wastefully always copying
- * OTP_FW_MAX_CANDIDATES entries. Passing a userspace pointer + count and
+ * OTP_FW_WIRE_MAX_CANDIDATES entries. Passing a userspace pointer + count and
  * having the driver's own ioctl handler copyin() exactly `count *
  * sizeof(otp_fw_candidate_t)` bytes from `candidates` is the standard
  * BSD pattern for variable-length ioctl data (the same shape

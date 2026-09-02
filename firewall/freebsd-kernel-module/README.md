@@ -48,10 +48,9 @@ tree. In descending order of how much the remaining uncertainty matters:
    table, and the sysctl kill switch** — ordinary, well-documented
    FreeBSD device-driver patterns (the same shape `/dev/bpf` and similar
    drivers use). Highest-confidence part of the module.
-6. **`Shared/packet_codec_freebsd.c`** — the highest-confidence file in
-   this whole port, and the only one actually exercised against real
-   code rather than just reasoned about: glibc (on the Linux machine
-   this was written on) optionally provides the same BSD-compat
+6. **`Shared/packet_codec_freebsd.c`** — the highest-confidence file
+   dealing with wire-format bytes in this port: glibc (on the Linux
+   machine this was written on) optionally provides the same BSD-compat
    `struct ip`/`struct tcphdr`/`struct udphdr` definitions FreeBSD uses
    natively (via `__FAVOR_BSD`/`__USE_MISC`), which let this file
    compile and run against `firewall/linux-kernel-module/tests/test_packet_codec.c`'s
@@ -65,6 +64,27 @@ tree. In descending order of how much the remaining uncertainty matters:
    and FreeBSD's native ones could still diverge in some field this
    test suite doesn't exercise), but it's meaningfully more verified
    than everything else in this port.
+7. **The entire userspace side** (`otp_firewalld_freebsd.c`,
+   `kernel_ctl_freebsd.c`, plus `ack.h`/`.c` — the delivery-acknowledgment
+   mechanism, see [`../README.md`'s "Delivery
+   acknowledgment"](../README.md#delivery-acknowledgment)) is the most
+   verified part of this entire port, not just reasoned about: with
+   `<sys/ioccom.h>` stubbed out (the one genuinely FreeBSD-only header
+   this code touches, since `ioctl(2)` command-encoding macros differ
+   from Linux's) it compiles warning-free and **links successfully**
+   against the real `cipher.c`/`keychain.c`/`commit.c` on this Linux
+   machine, runs (including a real call to `ack_recover_outstanding()` on
+   startup, per its identical wiring on every platform), opens both
+   delivery-ack sockets without error, and fails at exactly the expected
+   point (`/dev/otp_firewall` doesn't exist here, since the kernel module
+   can't be loaded outside FreeBSD). `ack.c`'s own table logic — including
+   crash/restart recovery, exercised with the real `otp` library, not
+   mocks — is additionally covered by
+   `firewall/linux-kernel-module/tests/test_ack.c` (10,000+ checks,
+   reused unmodified). What a link test can't confirm is the one thing
+   that's genuinely FreeBSD-specific here: whether the real `ioctl(2)`
+   command values (built from `_IOW`/`_IOR` in `otp_firewall_proto.h`)
+   actually match what the kernel side expects.
 
 Treat this the same way the Windows and macOS ports were treated before
 ever being built: a careful, best-effort starting point that needs a real
@@ -106,7 +126,11 @@ userspace; anything that might be relevant is consumed from the normal
 packet path and handed to the daemon over `/dev/otp_firewall` for the
 actual encrypt/decrypt decision, then reinjected on verdict. IPv6
 Neighbor Discovery is exempted directly in the module and never reaches
-the daemon at all.
+the daemon at all - so is the daemon's own delivery-acknowledgment
+traffic (see [`../README.md`'s "Delivery
+acknowledgment"](../README.md#delivery-acknowledgment)), a small UDP
+side channel on a fixed port the module lets through untouched in both
+directions.
 
 ## What's reused unmodified vs. what's new
 
@@ -121,7 +145,9 @@ and `main.c` (NFQUEUE-specific). These files are reused **directly, by
 reference, unmodified**:
 
 - `common.h`, `checksum.h`/`.c`, `config.h`/`.c`, `pin.h`/`.c`,
-  `trial.h`/`.c`, `keychain_setup.h`/`.c`, `log.h`/`.c`,
+  `trial.h`/`.c`, `keychain_setup.h`/`.c`, `log.h`/`.c`, `ack.h`/`.c`
+  (the delivery-acknowledgment mechanism — see [`../README.md`'s
+  "Delivery acknowledgment"](../README.md#delivery-acknowledgment)),
   `packet_codec.h`, `kernel_ctl.h` (just the headers — their declared
   APIs have no platform-specific types)
 
@@ -182,6 +208,7 @@ cc -O2 -Wall -Isrc -Ifirewall/daemon -Ifirewall/freebsd-kernel-module \
    firewall/freebsd-kernel-module/Shared/packet_codec_freebsd.c \
    firewall/daemon/config.c firewall/daemon/pin.c firewall/daemon/trial.c \
    firewall/daemon/checksum.c firewall/daemon/log.c firewall/daemon/keychain_setup.c \
+   firewall/daemon/ack.c \
    src/cipher.c src/keychain.c src/commit.c
 
 cc -O2 -Wall -Ifirewall/freebsd-kernel-module \

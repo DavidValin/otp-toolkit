@@ -38,6 +38,7 @@
 #include <linux/skbuff.h>
 #include <linux/ip.h>
 #include <linux/ipv6.h>
+#include <linux/udp.h>
 #include <net/ipv6.h>
 #include <linux/in.h>
 #include <linux/inet.h>
@@ -138,6 +139,64 @@ static int otp_fw_is_icmpv6(struct sk_buff *skb)
   return ip6h->nexthdr == IPPROTO_ICMPV6;
 }
 
+/* Ack-port traffic (firewall/daemon/ack.h's delivery-acknowledgment
+ * side channel) must never be routed through the encrypt/decrypt
+ * pipeline - it's this daemon's own control traffic, not application
+ * data, the same reasoning as the ICMPv6 exemption above. A single
+ * "destination UDP port == OTP_FW_ACK_PORT" check identifies it
+ * correctly in BOTH directions without needing to distinguish egress
+ * from ingress: an outbound ack/redeliver packet this daemon sends is
+ * always addressed TO the peer's OTP_FW_ACK_PORT (ack.c's
+ * send_datagram() lets the OS pick an ephemeral source port, never
+ * OTP_FW_ACK_PORT itself), and an inbound one is, by definition,
+ * addressed to this daemon's own listening socket on that same port. */
+static int otp_fw_is_ack_port(struct sk_buff *skb)
+{
+  __be16 dest_port;
+
+  if (skb->protocol == htons(ETH_P_IP))
+  {
+    struct iphdr *iph;
+    struct udphdr *uh;
+    if (!pskb_may_pull(skb, sizeof(struct iphdr)))
+      return 0;
+    iph = ip_hdr(skb);
+    if (iph->protocol != IPPROTO_UDP)
+      return 0;
+    if (!pskb_may_pull(skb, iph->ihl * 4 + sizeof(struct udphdr)))
+      return 0;
+    /* pskb_may_pull() can reallocate skb->data - re-resolve iph rather
+     * than trust the pointer obtained before this second pull, the same
+     * caution otp_fw_extract() takes by only ever pulling once per
+     * branch (this function needs two: header-length-dependent UDP
+     * offset isn't known until the IP header itself has been read). */
+    iph = ip_hdr(skb);
+    uh = (struct udphdr *)((unsigned char *)iph + iph->ihl * 4);
+    dest_port = uh->dest;
+  }
+  else if (skb->protocol == htons(ETH_P_IPV6))
+  {
+    struct ipv6hdr *ip6h;
+    struct udphdr *uh;
+    if (!pskb_may_pull(skb, sizeof(struct ipv6hdr)))
+      return 0;
+    ip6h = ipv6_hdr(skb);
+    if (ip6h->nexthdr != IPPROTO_UDP)
+      return 0;
+    if (!pskb_may_pull(skb, sizeof(struct ipv6hdr) + sizeof(struct udphdr)))
+      return 0;
+    ip6h = ipv6_hdr(skb); /* re-resolve, see the IPv4 branch's comment */
+    uh = (struct udphdr *)((unsigned char *)ip6h + sizeof(struct ipv6hdr));
+    dest_port = uh->dest;
+  }
+  else
+  {
+    return 0;
+  }
+
+  return dest_port == htons(OTP_FW_ACK_PORT);
+}
+
 /* dir_egress: 1 to extract the destination address (outbound hook), 0
  * for the source address (inbound hook). Returns 1 with *family/*v4/*v6
  * filled for a parsable TCP/UDP IPv4/IPv6 packet, 0 otherwise (caller
@@ -198,6 +257,8 @@ static unsigned int otp_fw_hook_egress(void *priv, struct sk_buff *skb,
     return NF_ACCEPT;
   if (otp_fw_is_icmpv6(skb))
     return NF_ACCEPT;
+  if (otp_fw_is_ack_port(skb))
+    return NF_ACCEPT;
   if (!otp_fw_extract(skb, 1, &family, &v4, &v6))
     return NF_DROP;
   if (otp_fw_is_candidate(family, v4, &v6))
@@ -218,6 +279,8 @@ static unsigned int otp_fw_hook_ingress(void *priv, struct sk_buff *skb,
   if (state->in && (state->in->flags & IFF_LOOPBACK))
     return NF_ACCEPT;
   if (otp_fw_is_icmpv6(skb))
+    return NF_ACCEPT;
+  if (otp_fw_is_ack_port(skb))
     return NF_ACCEPT;
   if (!otp_fw_extract(skb, 0, &family, &v4, &v6))
     return NF_DROP;

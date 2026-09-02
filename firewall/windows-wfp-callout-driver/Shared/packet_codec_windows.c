@@ -250,6 +250,14 @@ int otp_fw_describe_packet(const unsigned char *pkt, int pkt_len,
   return 0;
 }
 
+int otp_fw_header_length(const unsigned char *pkt, int pkt_len)
+{
+  ParsedPacket pp;
+  if (parse_packet(pkt, pkt_len, &pp) != 0)
+    return -1;
+  return (int)(pp.ip_hlen + pp.l4_hlen);
+}
+
 /* No ICMPv6 check lives in this file: the kernel driver exempts ICMPv6
  * entirely at its own fast-path candidate check (see
  * ../Driver/otp_firewall_driver.c's otp_fw_driver_is_icmpv6()) before an

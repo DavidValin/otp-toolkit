@@ -101,6 +101,23 @@ extern "C"
    * errno). `pkt`/`pkt_len` is the complete IP packet (header included). */
   int otp_fw_bridge_send_raw(const uint8_t *pkt, int pkt_len, int family);
 
+  /* Delivery-acknowledgment tick (see firewall/daemon/ack.h): drains
+   * both ack sockets (processing any ACK/REDELIVER packets waiting) and
+   * retries any outstanding message past its ack timeout. Call this
+   * periodically from Swift (e.g. a DispatchSourceTimer firing every
+   * ~1 second) - there's no select()/poll()-style event loop on this
+   * side the way firewall/daemon/main.c has, so this is deliberately a
+   * poll-and-return call rather than a blocking one. A no-op before
+   * otp_fw_bridge_setup() completes. Unlike the ICMPv6 exemption, the
+   * ack sockets need NO special Swift-side "let this bypass the tunnel"
+   * handling: they're ordinary UDP sockets opened from within this same
+   * extension process, so they should already fall outside
+   * NEPacketTunnelProvider's own capture scope the same way
+   * otp_fw_bridge_send_raw()'s raw-socket sends already rely on being
+   * exempt from looping back into this tunnel - see that function's own
+   * confidence note; this inherits the same unverified assumption. */
+  void otp_fw_bridge_ack_tick(void);
+
 #ifdef __cplusplus
 }
 #endif

@@ -17,6 +17,15 @@
 #define OTP_FW_IPSTR_LEN 46        /* fits "::ffff:255.255.255.255\0" */
 #define OTP_FW_HOST_LEN 256
 
+/* Fixed UDP port for the firewall's own delivery-ack side channel (see
+ * ack.h) - kernel-exempt on both platforms that implement it, the same
+ * way ICMPv6 is exempt, since it carries no application data and must
+ * never be routed through the encrypt/decrypt pipeline itself. */
+#define OTP_FW_ACK_PORT 34443
+#define OTP_FW_ACK_SOURCE_ID_LEN 16 /* mirrors META_SOURCE_LEN in src/cipher.c */
+#define OTP_FW_ACK_DEFAULT_TIMEOUT_SECONDS 5
+#define OTP_FW_MAX_ACK_SLOTS OTP_FW_MAX_CANDIDATES /* one per keychain contact, same bound as the candidate table */
+
 typedef enum
 {
   OTP_FW_MODE_ENFORCE = 0,
@@ -39,6 +48,7 @@ typedef enum
   OTP_FW_PENDING_RECOVERY,
   OTP_FW_PARSE_ERROR,
   OTP_FW_NOT_EVALUATED,
+  OTP_FW_ACK_PENDING, /* egress blocked: the previous message to this contact hasn't been acked yet - see ack.h */
   OTP_FW_INTERNAL_ERROR
 } otp_fw_result_t;
 
@@ -62,6 +72,8 @@ static inline const char *otp_fw_result_reason(otp_fw_result_t r)
     return "parse-error";
   case OTP_FW_NOT_EVALUATED:
     return "not-evaluated-log-only";
+  case OTP_FW_ACK_PENDING:
+    return "ack-pending";
   default:
     return "internal-error";
   }

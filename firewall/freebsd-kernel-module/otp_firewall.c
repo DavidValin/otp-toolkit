@@ -76,7 +76,7 @@ static MALLOC_DEFINE(M_OTPFW, "otp_firewall", "OTP-toolkit Firewall state");
 /* ------------------------------------------------------------------ */
 
 static struct mtx g_candidates_lock;
-static otp_fw_candidate_t *g_candidates; /* M_OTPFW, OTP_FW_MAX_CANDIDATES capacity */
+static otp_fw_candidate_t *g_candidates; /* M_OTPFW, OTP_FW_WIRE_MAX_CANDIDATES capacity */
 static uint32_t g_candidate_count;
 
 static int
@@ -103,7 +103,7 @@ otp_fw_is_candidate(uint8_t is_v6, const uint8_t *addr)
 static int
 otp_fw_set_candidates(const otp_fw_candidate_t *list, uint32_t count)
 {
-  if (count > OTP_FW_MAX_CANDIDATES)
+  if (count > OTP_FW_WIRE_MAX_CANDIDATES)
     return EINVAL;
 
   mtx_lock(&g_candidates_lock);
@@ -198,6 +198,41 @@ otp_fw_is_icmpv6(struct mbuf *m)
   return ip6->ip6_nxt == IPPROTO_ICMPV6;
 }
 
+/* Checks whether `*mp`'s UDP destination port equals OTP_FW_ACK_PORT -
+ * firewall/daemon/ack.h's delivery-acknowledgment side channel,
+ * exempted from the encrypt/decrypt pipeline the same way ICMPv6 is
+ * exempted above (see otp_firewall_proto.h for the shared port
+ * number). Only meaningful once the caller has already confirmed the
+ * packet is UDP.
+ *
+ * m_pullup() can both reallocate the mbuf chain AND, on failure, free
+ * it entirely - so this takes and updates `*mp` directly rather than a
+ * plain struct mbuf*, and the three-way return below is deliberate: a
+ * caller holding any pointer derived from `*mp` before this call (e.g.
+ * an `iph`/`ip6` header pointer) must treat it as invalid the instant
+ * this returns, regardless of which case fired, and re-derive it fresh
+ * from the (possibly new) `*mp` before touching it again.
+ *
+ *   1  - confirmed ack-port traffic; *mp is fresh, PFIL_PASS is correct
+ *   0  - not ack-port traffic (or the UDP header couldn't be read);
+ *        *mp is fresh, caller continues with its own remaining checks
+ *  -1  - the mbuf chain is gone (pullup failed); *mp has been set to
+ *        NULL, caller must return immediately without touching *mp or
+ *        any pointer derived from it again */
+static int
+otp_fw_is_ack_port(struct mbuf **mp, size_t ip_hdr_len)
+{
+  struct mbuf *pulled = m_pullup(*mp, ip_hdr_len + sizeof(struct udphdr));
+  if (!pulled)
+  {
+    *mp = NULL;
+    return -1;
+  }
+  *mp = pulled;
+  struct udphdr *uh = (struct udphdr *)(mtod(pulled, uint8_t *) + ip_hdr_len);
+  return (uh->uh_dport == htons(OTP_FW_ACK_PORT)) ? 1 : 0;
+}
+
 /* dir_out: 1 for the outbound hook (destination address is what matters
  * for candidate selection), 0 for inbound (source address matters).
  * Mirrors otp_fw_extract() in the Linux module and OtpFwClassifyCommon()
@@ -261,6 +296,21 @@ otp_fw_hook(void *arg, struct mbuf **mp, struct ifnet *ifp, int dir_out,
       m_freem(m);
       return EACCES; /* default-deny: not TCP/UDP and not the ICMPv6 exemption */
     }
+    if (ip6->ip6_nxt == IPPROTO_UDP)
+    {
+      int ack_rc = otp_fw_is_ack_port(&m, sizeof(struct ip6_hdr));
+      if (ack_rc < 0)
+      {
+        *mp = NULL;
+        return ENOBUFS;
+      }
+      if (ack_rc == 1)
+      {
+        *mp = m;
+        return 0; /* PFIL_PASS - see otp_fw_is_ack_port()'s comment */
+      }
+      ip6 = mtod(m, struct ip6_hdr *); /* re-derive: otp_fw_is_ack_port() may have reallocated m */
+    }
     memcpy(addr, dir_out ? &ip6->ip6_dst : &ip6->ip6_src, 16);
     family = AF_INET6;
   }
@@ -271,6 +321,21 @@ otp_fw_hook(void *arg, struct mbuf **mp, struct ifnet *ifp, int dir_out,
       *mp = NULL;
       m_freem(m);
       return EACCES;
+    }
+    if (iph->ip_p == IPPROTO_UDP)
+    {
+      int ack_rc = otp_fw_is_ack_port(&m, sizeof(struct ip)); /* fixed 20-byte header assumption, matching this function's existing IPv4 simplification */
+      if (ack_rc < 0)
+      {
+        *mp = NULL;
+        return ENOBUFS;
+      }
+      if (ack_rc == 1)
+      {
+        *mp = m;
+        return 0; /* PFIL_PASS */
+      }
+      iph = mtod(m, struct ip *); /* re-derive: otp_fw_is_ack_port() may have reallocated m */
     }
     uint32_t v4 = dir_out ? iph->ip_dst.s_addr : iph->ip_src.s_addr;
     memcpy(addr, &v4, 4);
@@ -527,7 +592,7 @@ otp_fw_dev_ioctl(struct cdev *dev, u_long cmd, caddr_t data, int fflag,
   case OTP_FW_IOC_SET_CANDIDATES:
   {
     otp_fw_set_candidates_t *req = (otp_fw_set_candidates_t *)data;
-    if (req->count > OTP_FW_MAX_CANDIDATES)
+    if (req->count > OTP_FW_WIRE_MAX_CANDIDATES)
       return EINVAL;
     otp_fw_candidate_t *buf = malloc(req->count * sizeof(otp_fw_candidate_t), M_OTPFW, M_WAITOK);
     int error = copyin(req->candidates, buf, req->count * sizeof(otp_fw_candidate_t));
@@ -652,7 +717,7 @@ otp_fw_modevent(module_t mod, int event, void *arg)
     mtx_init(&g_queue_lock, "otp_fw_queue", NULL, MTX_DEF);
     cv_init(&g_queue_cv, "otp_fw_queue_cv");
 
-    g_candidates = malloc(OTP_FW_MAX_CANDIDATES * sizeof(otp_fw_candidate_t), M_OTPFW, M_WAITOK | M_ZERO);
+    g_candidates = malloc(OTP_FW_WIRE_MAX_CANDIDATES * sizeof(otp_fw_candidate_t), M_OTPFW, M_WAITOK | M_ZERO);
 
     error = otp_fw_register_pfil();
     if (error)

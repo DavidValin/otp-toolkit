@@ -35,12 +35,12 @@ int otp_fw_kernel_push_candidates(const FwConfig *cfg)
     return -1;
   }
 
-  static otp_fw_candidate_t candidates[OTP_FW_MAX_CANDIDATES];
+  static otp_fw_candidate_t candidates[OTP_FW_WIRE_MAX_CANDIDATES];
   uint32_t count = 0;
 
   char *save = NULL;
   char *line = strtok_r(ip_list, "\n", &save);
-  while (line && count < OTP_FW_MAX_CANDIDATES)
+  while (line && count < OTP_FW_WIRE_MAX_CANDIDATES)
   {
     struct in_addr v4;
     struct in6_addr v6;
@@ -64,7 +64,7 @@ int otp_fw_kernel_push_candidates(const FwConfig *cfg)
     line = strtok_r(NULL, "\n", &save);
   }
   if (line)
-    fprintf(stderr, "Warning: candidate list exceeds %d entries, the rest were not pushed\n", OTP_FW_MAX_CANDIDATES);
+    fprintf(stderr, "Warning: candidate list exceeds %d entries, the rest were not pushed\n", OTP_FW_WIRE_MAX_CANDIDATES);
 
   int fd = open(OTP_FW_DEVICE_PATH, O_RDWR);
   if (fd < 0)

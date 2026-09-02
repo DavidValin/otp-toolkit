@@ -340,6 +340,36 @@ static void OtpFwClassifyCommon(
     return;
   }
 
+  /* Ack-port traffic (firewall/daemon/ack.h's delivery-acknowledgment
+   * side channel) must never be routed through the encrypt/decrypt
+   * pipeline - it's this service's own control traffic, not application
+   * data, the same reasoning as the ICMPv6 exemption above. A single
+   * "destination UDP port == OTP_FW_ACK_PORT" check identifies it
+   * correctly in both directions - see otp_firewall.c's identical
+   * check and comment on the Linux side for the full reasoning (this is
+   * the same wire port number, defined in
+   * firewall/daemon/common.h/OTP_FW_ACK_PORT - not otherwise reachable
+   * from this kernel-mode translation unit, so repeated here as a raw
+   * literal with the value called out explicitly to keep the two in
+   * sync by inspection). 17 is IPPROTO_UDP; this file has no existing
+   * named constant for it, matching how OtpFwIsIcmpv6() above also
+   * compares l4_proto against a raw literal (58) rather than a symbol. */
+  if (l4_proto == 17 /* IPPROTO_UDP */)
+  {
+    UINT32 ip_hdr_len = is_v6 ? 40 : 20; /* same fixed-size assumption the rest of this function already makes for both families */
+    UINT8 udp_scratch[44];              /* worst case: 40-byte IPv6 header + 4 bytes of UDP header (src/dst port) */
+    UINT8 *udp = (UINT8 *)NdisGetDataBuffer(nb, ip_hdr_len + 4, udp_scratch, 1, 0);
+    if (udp)
+    {
+      UINT16 dest_port = (UINT16)((udp[ip_hdr_len + 2] << 8) | udp[ip_hdr_len + 3]);
+      if (dest_port == 34443 /* OTP_FW_ACK_PORT - see the comment above */)
+      {
+        classifyOut->actionType = FWP_ACTION_PERMIT;
+        return;
+      }
+    }
+  }
+
   if (!OtpFwIsCandidate(is_v6, remote_addr))
   {
     /* No configured contact for this address: default-deny, same as

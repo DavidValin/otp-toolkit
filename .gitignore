@@ -3,5 +3,6 @@ bin
 *.dec
 *.enc
 test_*
+!test_*.c
 test-report.html
 .task-worktrees

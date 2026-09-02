@@ -49,6 +49,7 @@ class OTPFirewallProvider: NEPacketTunnelProvider {
   private var enforceMode = false
 
   private var reloadTimer: DispatchSourceTimer?
+  private var ackTimer: DispatchSourceTimer?
 
   override func startTunnel(options: [String: NSObject]?, completionHandler: @escaping (Error?) -> Void) {
     enforceMode = (options?["enforceMode"] as? Bool) ?? false
@@ -84,6 +85,7 @@ class OTPFirewallProvider: NEPacketTunnelProvider {
         return
       }
       self.startReloadTimer()
+      self.startAckTimer()
       self.readLoop()
       completionHandler(nil)
     }
@@ -92,6 +94,8 @@ class OTPFirewallProvider: NEPacketTunnelProvider {
   override func stopTunnel(with reason: NEProviderStopReason, completionHandler: @escaping () -> Void) {
     reloadTimer?.cancel()
     reloadTimer = nil
+    ackTimer?.cancel()
+    ackTimer = nil
     completionHandler()
   }
 
@@ -103,6 +107,22 @@ class OTPFirewallProvider: NEPacketTunnelProvider {
     }
     timer.resume()
     reloadTimer = timer
+  }
+
+  /// Drives the delivery-acknowledgment mechanism (see
+  /// firewall/daemon/ack.h): drains the ack sockets and retries any
+  /// message past its ack timeout. A short, frequent tick - unlike the
+  /// 60s config reload above - since the default ack retry timeout is a
+  /// few seconds (see OTP_FW_ACK_DEFAULT_TIMEOUT_SECONDS), mirroring
+  /// firewall/daemon/main.c's OTP_FW_TICK_INTERVAL_SECONDS.
+  private func startAckTimer() {
+    let timer = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
+    timer.schedule(deadline: .now() + 1, repeating: 1)
+    timer.setEventHandler {
+      otp_fw_bridge_ack_tick()
+    }
+    timer.resume()
+    ackTimer = timer
   }
 
   private func readLoop() {

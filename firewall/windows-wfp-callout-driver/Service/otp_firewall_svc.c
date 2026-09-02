@@ -25,6 +25,7 @@
  * otherwise race.
  */
 
+#include "ack.h"
 #include "common.h"
 #include "config.h"
 #include "keychain_setup.h"
@@ -49,11 +50,13 @@
 
 #define OTP_FW_SVC_NAME L"OTPFirewall"
 #define OTP_FW_DEFAULT_RESOLVE_INTERVAL_MS (60 * 1000)
+#define OTP_FW_ACK_TICK_MS 1000 /* mirrors main.c's OTP_FW_TICK_INTERVAL_SECONDS */
 
 typedef struct
 {
   FwConfig cfg;
   PinTable pins;
+  AckTable acks;
   char keychain_dir[512];
 } FwContext;
 
@@ -64,7 +67,10 @@ static int g_resolve_interval_ms = OTP_FW_DEFAULT_RESOLVE_INTERVAL_MS;
 static HANDLE g_stop_event;
 static HANDLE g_packet_thread;
 static HANDLE g_reload_thread;
+static HANDLE g_ack_thread;
 static HANDLE g_device = INVALID_HANDLE_VALUE; /* opened once in startup(), closed once from ServiceMain's own cleanup path after both worker threads have exited */
+static int g_ack_fd4 = -1; /* int, not SOCKET, to match ack.h's platform-uniform int fd type - see ack.c's own note on the SOCKET/int cast this implies on Windows */
+static int g_ack_fd6 = -1;
 static SERVICE_STATUS_HANDLE g_status_handle;
 static SERVICE_STATUS g_status;
 static volatile LONG g_stop_requested = 0; /* guards ServiceCtrlHandler against SCM delivering STOP and SHUTDOWN back to back */
@@ -101,6 +107,23 @@ static void reconcile_pins_with_config(void)
   }
 }
 
+/* Mirrors main.c's reconcile_acks_with_keychain(): a stale
+ * outstanding-ack slot (see ack.h) for a contact no longer in the
+ * keychain is harmless but pointless to keep around. */
+static void reconcile_acks_with_keychain(void)
+{
+  for (int i = 0; i < g_ctx.acks.count; i++)
+  {
+    char contact[MAX_NAME_LENGTH];
+    snprintf(contact, sizeof(contact), "%s", g_ctx.acks.slots[i].contact);
+    if (!find_contact(contact))
+    {
+      ack_clear_contact(&g_ctx.acks, contact);
+      i--;
+    }
+  }
+}
+
 /* Mirrors main.c's reload_config_and_push(), including the keychain
  * snapshot/restore-on-failure fix documented there in detail - that
  * fix is load-bearing (a transient failure must not silently wipe
@@ -120,6 +143,7 @@ static void reload_config_and_push(void)
   if (fwconfig_load(g_config_path, &g_ctx.cfg) == 0)
     fwconfig_resolve(&g_ctx.cfg);
   reconcile_pins_with_config();
+  reconcile_acks_with_keychain();
   otp_fw_kernel_push_candidates(&g_ctx.cfg);
   LeaveCriticalSection(&g_state_lock);
 }
@@ -127,6 +151,58 @@ static void reload_config_and_push(void)
 static const wchar_t *widen_dir(otp_fw_pkt_direction_t d)
 {
   return d == OTP_FW_PKT_OUTBOUND ? L"egress" : L"ingress";
+}
+
+/* Shared by process_packet()'s inbound branch (a normal candidate
+ * packet dequeued from the driver) and handle_redeliver_packet_locked()
+ * (a packet reconstructed from an ack-port REDELIVER, see ack.h) - both
+ * need exactly the same trial-decrypt/pin/ack-send logic. Must be
+ * called with g_state_lock already held. On OTP_FW_OK, also sends the
+ * delivery ack back to `src_ip` - the receiving half of the same
+ * mechanism process_packet()'s ack_mark_outstanding() call is the
+ * sending half of. */
+static otp_fw_result_t process_inbound_locked(const unsigned char *pkt, int pkt_len, const char *src_ip,
+                                              unsigned char *out_data, int out_cap, int *out_len,
+                                              char *contact_out, size_t contact_out_size)
+{
+  /* Same static-buffer reasoning as main.c's ingress_cb(): CandidateList
+   * is too large (~2.5MB) for a stack local, and reusing one is safe
+   * because trial_select_primary() rebuilds it from scratch every call
+   * and g_state_lock already serializes all callers. */
+  static CandidateList candidates;
+  trial_select_primary(g_ctx.keychain_dir, &g_ctx.cfg, &g_ctx.pins, src_ip, &candidates);
+
+  otp_fw_result_t r = otp_fw_decrypt_packet(g_ctx.keychain_dir, &candidates, pkt, pkt_len,
+                                            out_data, out_cap, out_len, contact_out, contact_out_size);
+
+  if (r != OTP_FW_OK && !candidates.exclusive)
+  {
+    trial_add_fallback_scan(g_ctx.keychain_dir, &candidates);
+    r = otp_fw_decrypt_packet(g_ctx.keychain_dir, &candidates, pkt, pkt_len,
+                              out_data, out_cap, out_len, contact_out, contact_out_size);
+  }
+
+  if (r == OTP_FW_OK)
+  {
+    if (pin_set(&g_ctx.pins, src_ip, contact_out) != 0)
+      fprintf(stderr, "Warning: pin table full (%d entries) - '%s' will use the slower "
+                      "trial path on every packet until a pin frees up\n",
+             OTP_FW_MAX_PINS, src_ip);
+
+    Contact *c = find_contact(contact_out);
+    unsigned char source_id[OTP_FW_ACK_SOURCE_ID_LEN];
+    if (c && ack_read_source_id_file(contact_out, c->DecryptedSequence, 0, source_id) == 0)
+    {
+      int family = strchr(src_ip, ':') ? AF_INET6 : AF_INET;
+      ack_socket_send(src_ip, family, source_id);
+    }
+    else
+    {
+      fprintf(stderr, "Warning: could not capture delivery-ack reference for inbound message from '%s' - no ack sent\n", contact_out);
+    }
+  }
+
+  return r;
 }
 
 /* Runs one dequeued packet through the same egress/ingress logic
@@ -156,12 +232,41 @@ static void process_packet(const otp_fw_dequeued_packet_t *in, otp_fw_verdict_su
 
   if (in->direction == OTP_FW_PKT_OUTBOUND)
   {
+    /* Free (no key spent) contact resolution first, so the delivery-ack
+     * gate (see ack.h) can reject a packet BEFORE ever calling the
+     * real, key-spending encrypt - see main.c's identical reasoning. */
+    r = otp_fw_classify_egress(g_ctx.keychain_dir, &g_ctx.cfg, in->data, (int)in->data_len, contact, sizeof(contact));
     int out_len = 0;
-    r = otp_fw_encrypt_packet(g_ctx.keychain_dir, &g_ctx.cfg, in->data, (int)in->data_len,
-                              out->data, sizeof(out->data), &out_len, contact, sizeof(contact));
+    if (r == OTP_FW_OK)
+    {
+      if (!ack_egress_allowed(&g_ctx.acks, contact))
+        r = OTP_FW_ACK_PENDING;
+      else
+        r = otp_fw_encrypt_packet(g_ctx.keychain_dir, &g_ctx.cfg, in->data, (int)in->data_len,
+                                  out->data, sizeof(out->data), &out_len, contact, sizeof(contact));
+    }
+
     if (r == OTP_FW_OK)
     {
       otp_fw_log_authorized("egress", contact, src_ip, src_port, dst_ip, dst_port, proto);
+
+      /* Track this message for delivery acknowledgment - see main.c's
+       * identical reasoning. */
+      int header_len = otp_fw_header_length(in->data, (int)in->data_len);
+      Contact *c = find_contact(contact);
+      unsigned char source_id[OTP_FW_ACK_SOURCE_ID_LEN];
+      if (header_len > 0 && c &&
+         ack_read_source_id_file(contact, c->EncryptedSequence, 1, source_id) == 0)
+      {
+        int family = strchr(dst_ip, ':') ? AF_INET6 : AF_INET;
+        if (ack_mark_outstanding(&g_ctx.acks, contact, c->EncryptedSequence, source_id, dst_ip, family, in->data, header_len) != 0)
+          fprintf(stderr, "Warning: ack table full - '%s' will send without delivery tracking until a slot frees up\n", contact);
+      }
+      else
+      {
+        fprintf(stderr, "Warning: could not capture delivery-ack reference for '%s' - sending without tracking\n", contact);
+      }
+
       out->verdict = OTP_FW_VERDICT_FORWARD_MODIFIED;
       out->data_len = (uint32_t)out_len;
     }
@@ -174,30 +279,12 @@ static void process_packet(const otp_fw_dequeued_packet_t *in, otp_fw_verdict_su
   }
   else
   {
-    /* Same static-buffer reasoning as main.c's ingress_cb(): CandidateList
-     * is too large (~2.5MB) for a stack local, and reusing one is safe
-     * because trial_select_primary() rebuilds it from scratch every call
-     * and g_state_lock already serializes all callers. */
-    static CandidateList candidates;
-    trial_select_primary(g_ctx.keychain_dir, &g_ctx.cfg, &g_ctx.pins, src_ip, &candidates);
-
     int out_len = 0;
-    r = otp_fw_decrypt_packet(g_ctx.keychain_dir, &candidates, in->data, (int)in->data_len,
-                              out->data, sizeof(out->data), &out_len, contact, sizeof(contact));
-
-    if (r != OTP_FW_OK && !candidates.exclusive)
-    {
-      trial_add_fallback_scan(g_ctx.keychain_dir, &candidates);
-      r = otp_fw_decrypt_packet(g_ctx.keychain_dir, &candidates, in->data, (int)in->data_len,
-                                out->data, sizeof(out->data), &out_len, contact, sizeof(contact));
-    }
+    r = process_inbound_locked(in->data, (int)in->data_len, src_ip, out->data, sizeof(out->data),
+                               &out_len, contact, sizeof(contact));
 
     if (r == OTP_FW_OK)
     {
-      if (pin_set(&g_ctx.pins, src_ip, contact) != 0)
-        fprintf(stderr, "Warning: pin table full (%d entries) - '%s' will use the slower "
-                        "trial path on every packet until a pin frees up\n",
-               OTP_FW_MAX_PINS, src_ip);
       otp_fw_log_authorized("ingress", contact, src_ip, src_port, dst_ip, dst_port, proto);
       out->verdict = OTP_FW_VERDICT_FORWARD_MODIFIED;
       out->data_len = (uint32_t)out_len;
@@ -211,6 +298,142 @@ static void process_packet(const otp_fw_dequeued_packet_t *in, otp_fw_verdict_su
   }
 
   LeaveCriticalSection(&g_state_lock);
+}
+
+/* Handles one REDELIVER packet from the ack socket (see ack.h):
+ * reconstructed IP+L4 header + ciphertext, run through the same
+ * trial-decrypt logic a normal dequeued packet would use. From the
+ * protocol's point of view this is indistinguishable from the original
+ * packet having simply arrived late - its only purpose is getting this
+ * contact's DecryptionKeyOffset back in sync and (on success, inside
+ * process_inbound_locked()) triggering the ack send back to the sender.
+ * There is no verdict to submit: this never came from the driver's
+ * queue. Must be called with g_state_lock already held. */
+static void handle_redeliver_packet_locked(const unsigned char *pkt, int pkt_len)
+{
+  char src_ip[OTP_FW_IPSTR_LEN], dst_ip[OTP_FW_IPSTR_LEN];
+  unsigned src_port, dst_port;
+  const char *proto;
+  if (otp_fw_describe_packet(pkt, pkt_len, src_ip, sizeof(src_ip), &src_port,
+                             dst_ip, sizeof(dst_ip), &dst_port, &proto) != 0)
+    return; /* malformed reconstruction - nothing sane to log or process */
+
+  static unsigned char outbuf[OTP_FW_MAX_PACKET];
+  int out_len = 0;
+  char contact[MAX_NAME_LENGTH] = {0};
+  otp_fw_result_t r = process_inbound_locked(pkt, pkt_len, src_ip, outbuf, sizeof(outbuf), &out_len,
+                                             contact, sizeof(contact));
+
+  if (r == OTP_FW_OK)
+    otp_fw_log_authorized("ingress", contact, src_ip, src_port, dst_ip, dst_port, proto);
+  else
+    otp_fw_log_restricted("ingress", contact[0] ? contact : NULL, src_ip, src_port, dst_ip, dst_port,
+                          proto, otp_fw_result_reason(r));
+}
+
+/* ack_scan_timeouts() callback (see ack.h) - identical reasoning to
+ * main.c's retry_outstanding_message(): resend the exact kept
+ * ciphertext via keychain_recover_last(), never a fresh encrypt. Called
+ * with g_state_lock already held (from AckThreadProc below). */
+static void retry_outstanding_message_locked(const AckSlot *slot, void *user_data)
+{
+  UNREFERENCED_PARAMETER(user_data);
+
+  char *cipherbuf = NULL;
+  size_t cipherlen = 0;
+  FILE *outf = open_memstream(&cipherbuf, &cipherlen);
+  if (!outf)
+    return;
+  int rc = keychain_recover_last(slot->contact, /*sent=*/1, outf);
+  fclose(outf);
+
+  if (rc != 0)
+  {
+    free(cipherbuf);
+    fprintf(stderr, "Warning: no kept ciphertext to retry for '%s' - it may have been removed\n", slot->contact);
+    return;
+  }
+
+  if (ack_socket_send_redeliver(slot->dest_ip, slot->family, slot->header, slot->header_len,
+                                (const unsigned char *)cipherbuf, (int)cipherlen) == 0)
+    ack_touch_retry(&g_ctx.acks, slot->contact);
+  else
+    fprintf(stderr, "Warning: failed to send delivery retry to '%s'\n", slot->contact);
+
+  free(cipherbuf);
+}
+
+static void drain_ack_socket_locked(int fd)
+{
+  /* static: AckRecvResult embeds a 70000-byte reconstruction buffer
+   * (OTP_FW_ACK_MAX_REDELIVER) - see main.c's identical reasoning for
+   * why this must not be a stack local. */
+  static AckRecvResult res;
+  for (;;)
+  {
+    int rc = ack_socket_recv(fd, &res);
+    if (rc <= 0)
+      return;
+
+    if (res.type == OTP_FW_ACK_PKT_ACK)
+    {
+      for (int i = 0; i < g_ctx.acks.count; i++)
+        if (ack_clear_if_matching(&g_ctx.acks, g_ctx.acks.slots[i].contact, res.source_id))
+          break;
+    }
+    else if (res.type == OTP_FW_ACK_PKT_REDELIVER)
+    {
+      handle_redeliver_packet_locked(res.reconstructed, res.reconstructed_len);
+    }
+  }
+}
+
+/* Drives the delivery-acknowledgment mechanism (see ack.h): unlike
+ * Linux's select()-based main loop, this uses WinSock's own select()
+ * with a short timeout as a simple poll-and-tick primitive, since this
+ * thread has nothing else to wait on besides the two ack sockets and
+ * the stop event. */
+static DWORD WINAPI AckThreadProc(LPVOID unused)
+{
+  UNREFERENCED_PARAMETER(unused);
+
+  for (;;)
+  {
+    if (WaitForSingleObject(g_stop_event, 0) == WAIT_OBJECT_0)
+      return 0;
+
+    fd_set rfds;
+    FD_ZERO(&rfds);
+    FD_SET((SOCKET)g_ack_fd4, &rfds);
+    SOCKET maxfd = (SOCKET)g_ack_fd4;
+    if (g_ack_fd6 >= 0)
+    {
+      FD_SET((SOCKET)g_ack_fd6, &rfds);
+      if ((SOCKET)g_ack_fd6 > maxfd)
+        maxfd = (SOCKET)g_ack_fd6;
+    }
+
+    struct timeval tv;
+    tv.tv_sec = OTP_FW_ACK_TICK_MS / 1000;
+    tv.tv_usec = (OTP_FW_ACK_TICK_MS % 1000) * 1000;
+    int nready = select((int)maxfd + 1, &rfds, NULL, NULL, &tv);
+
+    EnterCriticalSection(&g_state_lock);
+    if (nready > 0)
+    {
+      if (FD_ISSET((SOCKET)g_ack_fd4, &rfds))
+        drain_ack_socket_locked(g_ack_fd4);
+      if (g_ack_fd6 >= 0 && FD_ISSET((SOCKET)g_ack_fd6, &rfds))
+        drain_ack_socket_locked(g_ack_fd6);
+    }
+    /* Timeouts are scanned on every loop iteration regardless of
+     * whether select() found anything readable - the whole point of
+     * the short select() timeout above is to guarantee this runs
+     * roughly every OTP_FW_ACK_TICK_MS, the same cadence main.c's
+     * OTP_FW_TICK_INTERVAL_SECONDS drives on Linux. */
+    ack_scan_timeouts(&g_ctx.acks, OTP_FW_ACK_DEFAULT_TIMEOUT_SECONDS, retry_outstanding_message_locked, NULL);
+    LeaveCriticalSection(&g_state_lock);
+  }
 }
 
 static DWORD WINAPI PacketThreadProc(LPVOID unused)
@@ -312,6 +535,7 @@ static int startup(void)
   memset(&g_ctx, 0, sizeof(g_ctx));
   fwconfig_init(&g_ctx.cfg);
   pin_init(&g_ctx.pins);
+  ack_table_init(&g_ctx.acks);
   InitializeCriticalSection(&g_state_lock);
   g_crit_initialized = TRUE;
 
@@ -327,14 +551,34 @@ static int startup(void)
   /* Required for the same reason main.c documents at length: without
    * this, encrypt/decrypt_with_contact() block on an interactive
    * delivery-confirmation prompt this service, with no console, could
-   * never answer. */
+   * never answer. Genuinely true by the time it's consulted, though,
+   * not a blind assumption - see ack.h's file header. */
   keychain_set_assume_delivered(1);
+  cipher_set_ack_file(1);
 
   if (otp_fw_log_init() != 0)
     return -1;
 
+  /* AF_INET must succeed - see main.c's identical reasoning. AF_INET6
+   * is best-effort. */
+  g_ack_fd4 = ack_socket_open(AF_INET);
+  if (g_ack_fd4 < 0)
+  {
+    fprintf(stderr, "Error: could not open the IPv4 delivery-ack socket on port %d: %d\n",
+           OTP_FW_ACK_PORT, WSAGetLastError());
+    return -1;
+  }
+  g_ack_fd6 = ack_socket_open(AF_INET6);
+  if (g_ack_fd6 < 0)
+    fprintf(stderr, "Warning: could not open the IPv6 delivery-ack socket - IPv6 contacts will send without delivery tracking\n");
+
   snprintf(g_config_path, sizeof(g_config_path), "%s", OTP_FW_CONFIG_NAME); /* relative to ~/.otp, per the chdir inside otp_fw_setup_keychain_dir() */
   reload_config_and_push();
+
+  /* Crash/restart recovery - see ack.h's ack_recover_outstanding() doc
+   * comment and main.c's identical call. Must run before the device is
+   * opened and any real traffic is processed. */
+  ack_recover_outstanding(&g_ctx.acks, &g_ctx.cfg);
 
   g_device = CreateFileA(OTP_FW_WIN32_DEVICE_PATH, GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING, 0, NULL);
   if (g_device == INVALID_HANDLE_VALUE)
@@ -376,6 +620,16 @@ static VOID WINAPI ServiceMain(DWORD argc, LPWSTR *argv)
       CloseHandle(g_device);
       g_device = INVALID_HANDLE_VALUE;
     }
+    if (g_ack_fd4 >= 0)
+    {
+      closesocket((SOCKET)g_ack_fd4);
+      g_ack_fd4 = -1;
+    }
+    if (g_ack_fd6 >= 0)
+    {
+      closesocket((SOCKET)g_ack_fd6);
+      g_ack_fd6 = -1;
+    }
     fwconfig_free(&g_ctx.cfg);
     cleanup_keychain();
     if (g_crit_initialized)
@@ -396,17 +650,29 @@ static VOID WINAPI ServiceMain(DWORD argc, LPWSTR *argv)
 
   g_packet_thread = CreateThread(NULL, 0, PacketThreadProc, NULL, 0, NULL);
   g_reload_thread = CreateThread(NULL, 0, ReloadThreadProc, NULL, 0, NULL);
+  g_ack_thread = CreateThread(NULL, 0, AckThreadProc, NULL, 0, NULL);
 
-  HANDLE waitables[2] = {g_packet_thread, g_reload_thread};
-  WaitForMultipleObjects(2, waitables, TRUE, INFINITE);
+  HANDLE waitables[3] = {g_packet_thread, g_reload_thread, g_ack_thread};
+  WaitForMultipleObjects(3, waitables, TRUE, INFINITE);
 
   CloseHandle(g_packet_thread);
   CloseHandle(g_reload_thread);
+  CloseHandle(g_ack_thread);
   CloseHandle(g_stop_event);
   if (g_device != INVALID_HANDLE_VALUE)
   {
     CloseHandle(g_device);
     g_device = INVALID_HANDLE_VALUE;
+  }
+  if (g_ack_fd4 >= 0)
+  {
+    closesocket((SOCKET)g_ack_fd4);
+    g_ack_fd4 = -1;
+  }
+  if (g_ack_fd6 >= 0)
+  {
+    closesocket((SOCKET)g_ack_fd6);
+    g_ack_fd6 = -1;
   }
   fwconfig_free(&g_ctx.cfg);
   cleanup_keychain();

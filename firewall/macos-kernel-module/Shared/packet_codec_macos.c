@@ -193,6 +193,14 @@ int otp_fw_describe_packet(const unsigned char *pkt, int pkt_len,
   return 0;
 }
 
+int otp_fw_header_length(const unsigned char *pkt, int pkt_len)
+{
+  ParsedPacket pp;
+  if (parse_packet(pkt, pkt_len, &pp) != 0)
+    return -1;
+  return (int)(pp.ip_hlen + pp.l4_hlen);
+}
+
 /* fmemopen() rejects a zero-length buffer. Kept for the ingress/decrypt
  * side, which can legitimately be handed a zero-length ciphertext by an
  * unauthenticated sender (a bare zero-length UDP datagram, say) - that

@@ -22,6 +22,7 @@ keychains, not the network stack.
 | `test_config.c` | `config.c` - `firewall.config` parsing, resolution, candidate IP list, and the reload-preserves-resolved-IP fix |
 | `test_trial.c` | `trial.c` - pin → config → keychain-scan candidate ordering, exclusivity |
 | `test_packet_codec.c` | `packet_codec.c` - full encrypt/decrypt round trip over hand-built IPv4/IPv6 TCP/UDP packets, checksum correctness, the log-only classify functions never spending key material, the empty-payload (bare ACK) fix, and the length-field-ceiling pre-check never spending key material either |
+| `test_ack.c` | `ack.c` - the delivery-acknowledgment table (see `../../README.md`'s "Delivery acknowledgment"): the egress gate, matching/mismatching acks, timeout-triggered retries, and per-contact slot reuse/cleanup. Pure table logic only - real socket I/O isn't exercised here |
 
 `main.c` (the NFQUEUE event loop itself) isn't covered here: it's a thin
 wrapper around the logic above, and exercising it for real needs an

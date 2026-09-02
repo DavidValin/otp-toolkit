@@ -7,6 +7,7 @@
    - [Outgoing traffic](#outgoing-traffic)
    - [Incoming traffic](#incoming-traffic)
    - [Every packet is checked individually](#every-packet-is-checked-individually)
+   - [Delivery acknowledgment](#delivery-acknowledgment)
    - [Key material is consumed as you go](#key-material-is-consumed-as-you-go)
    - [IPv6 still works](#ipv6-still-works)
 3. [Configuration file format](#configuration-file-format)
@@ -84,13 +85,61 @@ If no key works, the packet is dropped and logged.
 ### Every packet is checked individually
 
 The firewall doesn't establish an ongoing "trusted session" — every single
-packet has to prove itself on its own. This has one real-world consequence:
-if packets from a contact happen to arrive out of order (which can happen on
-real networks), the out-of-order packet is rejected, even though it's
-genuinely from that contact. For most applications, which use TCP, this
-corrects itself automatically — the application notices something didn't
-arrive and resends it, and the resend is checked fresh. Applications using
-UDP with no retry logic of their own can lose data in this situation.
+packet has to prove itself on its own, using the exact next slice of key
+material in sequence. This has a real consequence: if a packet is rejected
+(arrived out of order, was lost, anything), the contact's two firewalls are
+now out of sync — the sender has moved on to the next slice of key material,
+but the receiver is still waiting for the one that got rejected, and one-time-pad
+key material can only ever be consumed moving forward, never rewound. An
+ordinary TCP retransmission does **not** reliably fix this on its own: a
+retransmission is a new outgoing packet, encrypted fresh with whatever key
+material the sender has reached by then — not the exact slice the receiver
+is still stuck expecting. See ["Delivery
+acknowledgment"](#delivery-acknowledgment) below for how the firewall
+actually prevents this from happening.
+
+### Delivery acknowledgment
+
+Because the consequence above is real, the firewall doesn't just encrypt a
+message and hope it arrived — it waits for proof. After decrypting a message
+successfully, the receiving firewall sends a small reference back to the
+sender (the message's `source_id`, a value that's safe to reveal after the
+fact since it was never used to encrypt anything — see `otp --help`'s
+`--with-ack-file` documentation for the same mechanism the manual CLI
+exposes). The sending firewall will not encrypt and send another message to
+that contact until it has seen that reference come back. This is what keeps
+the two sides' key material genuinely in sync, instead of just assuming it.
+
+The direct cost: each contact is effectively limited to one message in
+flight at a time, waiting roughly one network round-trip before the next can
+even be encrypted — noticeably slower than raw TCP for a contact carrying a
+lot of traffic (a page load, a large file transfer). This is a deliberate
+tradeoff, not an oversight: closing the desync gap above is worth more than
+raw throughput.
+
+If the acknowledgment doesn't arrive within a few seconds, the firewall
+automatically resends the exact same already-encrypted message (not a fresh
+one — that would spend new key material and only make the gap worse) and
+keeps waiting. This repeats until the acknowledgment comes back, so a
+transient loss recovers on its own without operator intervention.
+
+This tracking survives a crash or restart of the firewall itself, not just a
+network hiccup. The underlying `otp` library already keeps a durable copy of
+the last message sent to each contact on disk, precisely so that an
+unconfirmed message is never silently forgotten; the firewall reuses that
+existing mechanism (rather than inventing a new one) to reconstruct, on
+startup, which contacts still had a message genuinely awaiting acknowledgment
+when the process last stopped, and correctly keeps blocking new traffic to
+them until a real acknowledgment is seen. In the ordinary case (the last
+message to a contact was already acknowledged before the restart), this
+recovery step is a no-op and traffic resumes immediately — it only holds a
+contact back when there was genuinely something still unconfirmed. One
+narrower case remains a known limitation: if the disk record that also holds
+the acknowledgment reference doesn't survive the crash (as opposed to the
+durable copy above, which reliably does), the firewall correctly keeps
+blocking that contact but can no longer automatically resend the message —
+an operator has to resolve it manually, or simply wait for the two sides to
+notice and recover through their own application-level retry.
 
 ### Key material is consumed as you go
 
@@ -181,7 +230,12 @@ connection — only the two firewalls involved ever see the grown form.
 - **Packet reordering** causes a genuinely valid packet to be rejected if it
   arrives out of order (see ["Every packet is checked
   individually"](#every-packet-is-checked-individually) above) — expected
-  behavior, not a malfunction.
+  behavior, not a malfunction, and recovered from automatically by the
+  mechanism described in ["Delivery
+  acknowledgment"](#delivery-acknowledgment).
+- **Throughput:** delivery acknowledgment (see above) limits each contact to
+  one message in flight at a time — noticeably slower than raw TCP for a
+  contact carrying a lot of traffic. This is deliberate, not a bug.
 - Only TCP and UDP traffic is ever admitted. Every other protocol is
   blocked, except IPv6 Neighbor Discovery, which always passes through
   untouched (see ["IPv6 still works"](#ipv6-still-works) above).

@@ -8,9 +8,13 @@ building, configuring, and turning the Linux port on and off.
 
 ## Status
 
-Built, compiled, and unit-tested: `tests/` (in this directory) runs 4,273
+Built, compiled, and unit-tested: `tests/` (in this directory) runs 14,348
 checks against `otp-firewalld`'s code, all passing, rebuilt and reverified
-after every change. The kernel module itself (`otp_firewall.ko`) has never
+after every change — including real end-to-end tests (using the actual
+`otp` library, not mocks) of crash/restart recovery for the
+delivery-acknowledgment mechanism (see [`../README.md`'s "Delivery
+acknowledgment"](../README.md#delivery-acknowledgment)). The kernel module
+itself (`otp_firewall.ko`) has never
 been `insmod`'d on a real machine — its netfilter hook registration and
 NFQUEUE hand-off were reasoned about carefully against stable, well-documented
 kernel APIs, but treat it as unverified until you've loaded it yourself and
@@ -20,7 +24,7 @@ watched `dmesg`.
 
 ```
                          ┌────────────────────────────────────────┐
-                         │   otp_firewall.ko  (kernel module)      │
+                         │   otp_firewall.ko  (kernel module)     │
                          │                                        │
   outgoing packet ───────►  known destination? ─ no ──► blocked   │
                          │           │ maybe                      │
@@ -48,7 +52,11 @@ anything that obviously doesn't match, without ever leaving the kernel;
 anything that might be relevant is handed to `otp-firewalld` over a pair of
 NFQUEUE queues (0 for outgoing, 1 for incoming, by default) for the actual
 encrypt/decrypt decision. IPv6 Neighbor Discovery is exempted directly in
-the kernel module and never reaches the daemon at all.
+the kernel module and never reaches the daemon at all - so is the
+daemon's own delivery-acknowledgment traffic (see [`../README.md`'s
+"Delivery acknowledgment"](../README.md#delivery-acknowledgment)), a
+small UDP side channel on a fixed port the kernel module lets through
+untouched in both directions.
 
 ## Compile
 
@@ -157,9 +165,11 @@ sudo otp-firewalld --mode=enforce
 ```
 
 Full flag list: `otp-firewalld --help`. Notably: `--config=PATH` to use a
-config file other than `~/.otp/firewall.config`, and
-`--resolve-interval=SECONDS` to change how often `firewall.config` hostnames
-are re-resolved (60s by default).
+config file other than `~/.otp/firewall.config`, `--resolve-interval=SECONDS`
+to change how often `firewall.config` hostnames are re-resolved (60s by
+default), and `--ack-timeout=SECONDS` to change how long the daemon waits
+for a peer's delivery acknowledgment before retrying (5s by default — see
+[`../README.md`'s "Delivery acknowledgment"](../README.md#delivery-acknowledgment)).
 
 ### 3. Turn the firewall on
 
