@@ -8,6 +8,11 @@
 #define OTP_FW_AUTH_LOG_NAME "authorized.log"
 #define OTP_FW_RESTRICT_LOG_NAME "restricted.log"
 
+/* Linux-only procfs paths, used by Linux's own kernel_ctl.c/otpfwctl.c -
+ * every platform keeps this file byte-identical by convention (see each
+ * platform's README), so these are present but unused on platforms
+ * whose own kernel_ctl.c pushes candidates a different way (ioctl on
+ * Windows/FreeBSD; no separate kernel component at all on macOS). */
 #define OTP_FW_PROC_ENABLED "/proc/otp_firewall/enabled"
 #define OTP_FW_PROC_CANDIDATES "/proc/otp_firewall/candidates"
 
@@ -18,9 +23,12 @@
 #define OTP_FW_HOST_LEN 256
 
 /* Fixed UDP port for the firewall's own delivery-ack side channel (see
- * ack.h) - kernel-exempt on both platforms that implement it, the same
- * way ICMPv6 is exempt, since it carries no application data and must
- * never be routed through the encrypt/decrypt pipeline itself. */
+ * ack.h) - exempt from the encrypt/decrypt pipeline on every platform,
+ * since it carries no application data and must never be routed through
+ * it. On platforms with a real kernel-level hook (Linux, Windows,
+ * FreeBSD) this is enforced right in the kernel/driver, the same way
+ * ICMPv6 is; macOS has no separate kernel component, so its ack socket
+ * simply rides outside the System Extension's own capture scope. */
 #define OTP_FW_ACK_PORT 34443
 #define OTP_FW_ACK_SOURCE_ID_LEN 16 /* mirrors META_SOURCE_LEN in src/cipher.c */
 #define OTP_FW_ACK_DEFAULT_TIMEOUT_SECONDS 5

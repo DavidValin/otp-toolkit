@@ -19,10 +19,14 @@
  * reload here genuinely needs a second thread - which in turn means
  * every access to g_keychain (a bare global in keychain.c, not
  * thread-safe) and to FwContext must be serialized with an explicit
- * CRITICAL_SECTION. Neither of the other two platforms needs this:
- * Linux's signal-interrupt model and macOS's NEPacketTunnelProvider
- * packet-handling queue both already serialize everything that would
- * otherwise race.
+ * CRITICAL_SECTION. Neither of the other two platforms needs this the
+ * same way: FreeBSD's daemon is single-threaded like Linux's (a
+ * select()-based main loop, no separate thread ever touches this
+ * state); macOS's bridge is called from Swift code whose exact
+ * threading isn't confirmable without a real target to test against,
+ * so it takes the same conservative approach as here - wrapping every
+ * call in an explicit lock (a pthread_mutex there) rather than assuming
+ * safety.
  */
 
 #include "ack.h"
@@ -148,11 +152,6 @@ static void reload_config_and_push(void)
   LeaveCriticalSection(&g_state_lock);
 }
 
-static const wchar_t *widen_dir(otp_fw_pkt_direction_t d)
-{
-  return d == OTP_FW_PKT_OUTBOUND ? L"egress" : L"ingress";
-}
-
 /* Shared by process_packet()'s inbound branch (a normal candidate
  * packet dequeued from the driver) and handle_redeliver_packet_locked()
  * (a packet reconstructed from an ack-port REDELIVER, see ack.h) - both
@@ -213,10 +212,6 @@ static otp_fw_result_t process_inbound_locked(const unsigned char *pkt, int pkt_
  * pins), same reasoning as reload_config_and_push() above. */
 static void process_packet(const otp_fw_dequeued_packet_t *in, otp_fw_verdict_submission_t *out)
 {
-  char narrow_dir[8];
-  snprintf(narrow_dir, sizeof(narrow_dir), "%s", in->direction == OTP_FW_PKT_OUTBOUND ? "egress" : "ingress");
-  (void)widen_dir;
-
   char src_ip[OTP_FW_IPSTR_LEN], dst_ip[OTP_FW_IPSTR_LEN];
   unsigned src_port, dst_port;
   const char *proto;

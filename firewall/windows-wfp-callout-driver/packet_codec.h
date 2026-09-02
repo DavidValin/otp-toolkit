@@ -16,7 +16,9 @@
 #define OTP_FW_MAX_GROWTH 128
 
 /* Egress: `pkt` is the original captured IP packet (network byte order,
- * as handed up by NFQUEUE) of a TCP or UDP flow. On OTP_FW_OK, `out`
+ * as handed up by whichever platform-specific mechanism queued it -
+ * NFQUEUE on Linux, NEPacketTunnelFlow on macOS, an IOCTL dequeue on
+ * Windows/FreeBSD) of a TCP or UDP flow. On OTP_FW_OK, `out`
  * holds the modified packet (same source/dest IP and port, grown
  * payload, fixed lengths and checksums) and `*out_len` its length;
  * `contact_out` receives the contact name used. `out_cap` must be at

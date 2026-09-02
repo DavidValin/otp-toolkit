@@ -1,10 +1,11 @@
 /*
- * OTPFirewallBridge.c - the macOS analog of firewall/linux-kernel-module/otp_firewalld.c's
- * egress_cb()/ingress_cb(), minus the NFQUEUE plumbing (there's no
+ * OTPFirewallBridge.c - the macOS analog of Linux's otp_firewalld.c
+ * (egress_cb()/ingress_cb()), minus the NFQUEUE plumbing (there's no
  * separate kernel piece here to hand a verdict back to - this bridge,
  * called from OTPFirewallProvider.swift's packet loop, IS the
- * enforcement point). Reuses firewall/linux-kernel-module/{common,config,pin,trial,
- * packet_codec,log,keychain_setup}.h and links against the real
+ * enforcement point). Reuses this directory's own {common,config,pin,
+ * trial,packet_codec,log,keychain_setup}.h (byte-identical to Linux's
+ * copies - see README.md) and links against the real
  * src/{cipher,keychain,commit}.c unmodified, exactly like the Linux
  * daemon does.
  *
@@ -67,7 +68,7 @@ static void reconcile_pins_with_config_locked(void)
   }
 }
 
-/* Mirrors firewall/linux-kernel-module/otp_firewalld.c's reconcile_acks_with_keychain(): a
+/* Mirrors Linux's otp_firewalld.c's reconcile_acks_with_keychain(): a
  * stale outstanding-ack slot for a contact no longer in the keychain is
  * harmless but pointless to keep around. */
 static void reconcile_acks_with_keychain_locked(void)
@@ -112,8 +113,8 @@ int otp_fw_bridge_setup(void)
   }
   if (rc == 0)
   {
-    /* AF_INET must succeed - see otp_firewalld.c's identical reasoning. AF_INET6
-     * is best-effort. */
+    /* AF_INET must succeed - see Linux's otp_firewalld.c for identical
+     * reasoning. AF_INET6 is best-effort. */
     g_ack_fd4 = ack_socket_open(AF_INET);
     if (g_ack_fd4 < 0)
     {
@@ -133,8 +134,8 @@ int otp_fw_bridge_setup(void)
     fwconfig_load(OTP_FW_CONFIG_NAME, &g_cfg); /* relative to ~/.otp, per otp_fw_setup_keychain_dir()'s chdir */
     fwconfig_resolve(&g_cfg);
     /* Crash/restart recovery - see ack.h's ack_recover_outstanding() doc
-     * comment and otp_firewalld.c's identical call. Must run before g_setup_done
-     * lets any real traffic through. */
+     * comment and Linux's otp_firewalld.c for the identical call. Must
+     * run before g_setup_done lets any real traffic through. */
     ack_recover_outstanding(&g_acks, &g_cfg);
     g_setup_done = 1;
   }
@@ -194,7 +195,8 @@ otp_fw_action_t otp_fw_bridge_process_outbound(const uint8_t *pkt, int pkt_len,
   {
     /* Free (no key spent) contact resolution first, so the delivery-ack
      * gate (see ack.h) can reject a packet BEFORE ever calling the
-     * real, key-spending encrypt - see otp_firewalld.c's identical reasoning. */
+     * real, key-spending encrypt - see Linux's otp_firewalld.c for
+     * identical reasoning. */
     r = otp_fw_classify_egress(g_keychain_dir, &g_cfg, pkt, pkt_len, contact, sizeof(contact));
     if (r == OTP_FW_OK)
     {
@@ -212,8 +214,9 @@ otp_fw_action_t otp_fw_bridge_process_outbound(const uint8_t *pkt, int pkt_len,
     otp_fw_log_authorized("egress", contact, src_ip, src_port, dst_ip, dst_port, proto);
     if (enforce_mode)
     {
-      /* Track this message for delivery acknowledgment - see otp_firewalld.c's
-       * identical reasoning for why this is enforce-mode-only. */
+      /* Track this message for delivery acknowledgment - see Linux's
+       * otp_firewalld.c for identical reasoning on why this is
+       * enforce-mode-only. */
       int header_len = otp_fw_header_length(pkt, pkt_len);
       Contact *c = find_contact(contact);
       unsigned char source_id[OTP_FW_ACK_SOURCE_ID_LEN];
@@ -254,7 +257,7 @@ static otp_fw_result_t process_inbound_locked(const uint8_t *pkt, int pkt_len, c
                                               int enforce_mode, char *contact_out, size_t contact_out_size)
 {
   /* static: CandidateList is ~2.5MB (OTP_FW_MAX_CANDIDATES *
-   * MAX_NAME_LENGTH) - see the identical comment in firewall/linux-kernel-module/
+   * MAX_NAME_LENGTH) - see the identical comment in Linux's
    * otp_firewalld.c for why this must not be a stack local. */
   static CandidateList candidates;
   trial_select_primary(g_keychain_dir, &g_cfg, &g_pins, src_ip, &candidates);
@@ -417,9 +420,10 @@ int otp_fw_bridge_send_raw(const uint8_t *pkt, int pkt_len, int family)
 }
 
 /* ack_scan_timeouts() callback (see ack.h) - identical reasoning to
- * otp_firewalld.c's retry_outstanding_message(): resend the exact kept
- * ciphertext via keychain_recover_last(), never a fresh encrypt. Called
- * with g_lock already held (from otp_fw_bridge_ack_tick() below). */
+ * Linux's otp_firewalld.c's retry_outstanding_message(): resend the
+ * exact kept ciphertext via keychain_recover_last(), never a fresh
+ * encrypt. Called with g_lock already held (from
+ * otp_fw_bridge_ack_tick() below). */
 static void retry_outstanding_message_locked(const AckSlot *slot, void *user_data)
 {
   (void)user_data;
@@ -479,8 +483,8 @@ static void handle_redeliver_packet_locked(const uint8_t *pkt, int pkt_len)
 static void drain_ack_socket_locked(int fd)
 {
   /* static: AckRecvResult embeds a 70000-byte reconstruction buffer
-   * (OTP_FW_ACK_MAX_REDELIVER) - see otp_firewalld.c's identical reasoning for
-   * why this must not be a stack local. */
+   * (OTP_FW_ACK_MAX_REDELIVER) - see Linux's otp_firewalld.c for
+   * identical reasoning on why this must not be a stack local. */
   static AckRecvResult res;
   for (;;)
   {

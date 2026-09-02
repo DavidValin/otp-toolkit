@@ -46,11 +46,11 @@
  * reasoning as OTP_FW_BRIDGE_BUF_CAP in the macOS port. */
 #define OTP_FW_MAX_PACKET 70000
 
-/* Deliberately small and fixed: one contact-name-sized (MAX_NAME_LENGTH,
- * see src/keychain.h) string buffer, since a dequeued packet only needs
- * to travel with enough context for the service to log/decide, not a
- * duplicate of the whole candidate table. */
-#define OTP_FW_MAX_CANDIDATE_TEXT (1 << 20) /* matches the other platforms' generous config-push cap */
+/* Size of the static text buffer Service/kernel_ctl.c builds the
+ * newline-separated candidate IP list into before pushing it to the
+ * driver - generous enough for a very large firewall.config, matching
+ * the other platforms' equally generous config-push cap. */
+#define OTP_FW_MAX_CANDIDATE_TEXT (1 << 20)
 
 /* Named otp_fw_pkt_direction_t, not otp_fw_direction_t: this directory's
  * own common.h - included by Service/ alongside this header - already

@@ -12,8 +12,9 @@ typedef struct
   int count;
   /* 1 if this list came from a pin: a failure against it must be
    * rejected outright, never fall back to scanning the rest of the
-   * keychain (src/pin.h; the exclusivity is an explicit product
-   * decision, not a performance shortcut). */
+   * keychain - see ../README.md's "Incoming traffic" section (cited
+   * again below); the exclusivity is an explicit product decision, not
+   * a performance shortcut. */
   int exclusive;
 } CandidateList;
 

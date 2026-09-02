@@ -4,9 +4,10 @@
 #include "config.h"
 
 /* Pushes the config's current resolved candidate IP set to the kernel
- * module's /proc/otp_firewall/candidates. Missing (module not loaded)
- * is reported but not fatal, so the daemon can still run in a
- * kernel-module-less test setup driving NFQUEUE via nft rules directly.
+ * module - the mechanism is platform-specific (see this directory's own
+ * kernel_ctl.c: a /proc write on Linux, ioctl(2) on Windows/FreeBSD).
+ * The kernel module being unreachable (not loaded) is reported but not
+ * fatal, so the daemon can still run against a not-yet-loaded module.
  * Returns 0 on success, -1 otherwise. */
 int otp_fw_kernel_push_candidates(const FwConfig *cfg);
 

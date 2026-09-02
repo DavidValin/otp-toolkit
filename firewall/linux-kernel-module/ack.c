@@ -10,7 +10,7 @@
 #include <time.h>
 
 /* Socket headers - same portability split as checksum.h/config.c: this
- * file is shared unmodified across every platform's daemon (Linux,
+ * file is kept byte-identical across every platform's own copy (Linux,
  * macOS, Windows, FreeBSD), same as pin.c/config.c/checksum.c. */
 #ifdef _WIN32
 #include <winsock2.h>

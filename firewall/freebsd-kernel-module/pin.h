@@ -4,8 +4,12 @@
 #include "common.h"
 #include "keychain.h" /* MAX_NAME_LENGTH */
 
-/* Not thread-safe: the daemon runs a single NFQUEUE processing loop
- * (see otp_firewalld.c), so no locking is needed here. */
+/* Not thread-safe: callers must serialize access themselves. Linux and
+ * FreeBSD's daemons are single-threaded by construction, so no locking
+ * is needed there; Windows and macOS wrap every call to this table in
+ * an explicit lock (a CRITICAL_SECTION and a pthread_mutex,
+ * respectively) since Windows is genuinely multi-threaded and macOS's
+ * callback threading can't be confirmed safe otherwise. */
 
 typedef struct
 {

@@ -7,8 +7,8 @@
  * packets to userspace (otp_firewalld) via the standard NFQUEUE verdict -
  * the actual trial-decryption, packet growth/shrink and checksum work all
  * happen there, reusing the existing (unmodified) otp cipher/keychain
- * library. See README.md in this directory ("Architecture") for the full design and why it's split
- * this way.
+ * library. See README.md in this directory ("Architecture") for the full
+ * design and why it's split this way.
  *
  * Scope (v1): hooks are registered only in
  * init_net (no per-namespace/container support), and only TCP/UDP over
@@ -139,8 +139,8 @@ static int otp_fw_is_icmpv6(struct sk_buff *skb)
   return ip6h->nexthdr == IPPROTO_ICMPV6;
 }
 
-/* Ack-port traffic (firewall/linux-kernel-module/ack.h's delivery-acknowledgment
- * side channel) must never be routed through the encrypt/decrypt
+/* Ack-port traffic (ack.h's delivery-acknowledgment side channel) must
+ * never be routed through the encrypt/decrypt
  * pipeline - it's this daemon's own control traffic, not application
  * data, the same reasoning as the ICMPv6 exemption above. A single
  * "destination UDP port == OTP_FW_ACK_PORT" check identifies it

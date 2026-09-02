@@ -87,13 +87,12 @@ int ack_egress_allowed(const AckTable *t, const char *contact);
  * contact). `seq` is the message's EncryptedSequence.
  *
  * `source_id` may be NULL (recovered-at-startup case - see
- * ack_recover_outstanding() below and the file header's note on why the
- * ack-ref file might not have survived): the
- * slot is still marked outstanding (still correctly blocks new egress
- * to this contact), but has_expected_source_id is left false, so
- * ack_clear_if_matching() can never clear it until an operator resolves
- * it out of band - failing closed rather than either silently allowing
- * new traffic or accepting an unverified ack.
+ * ack_recover_outstanding() below for why the ack-ref file might not
+ * have survived): the slot is still marked outstanding (still correctly
+ * blocks new egress to this contact), but has_expected_source_id is left
+ * false, so ack_clear_if_matching() can never clear it until an operator
+ * resolves it out of band - failing closed rather than either silently
+ * allowing new traffic or accepting an unverified ack.
  *
  * `header`/`header_len` is the original packet's IP+L4 header bytes
  * (NOT the payload) - kept so a later timeout retry can reconstruct the
@@ -135,8 +134,10 @@ void ack_clear_contact(AckTable *t, const char *contact);
  * (its header bytes are what the caller needs to reconstruct the
  * packet). The caller is expected to actually resend it (fetching the
  * matching ciphertext via keychain_recover_last(contact, 1, ...) and
- * concatenating it after `slot->header` - see otp_firewalld.c) and, on a
- * successful resend, call ack_touch_retry() to reset this slot's clock
+ * concatenating it after `slot->header` - see this platform's daemon
+ * entrypoint, otp_firewalld.c on Linux/Windows/FreeBSD or
+ * OTPFirewallBridge.c on macOS) and, on a successful resend, call
+ * ack_touch_retry() to reset this slot's clock
  * - ack_scan_timeouts() only identifies candidates, it never touches
  * sent_at itself, so a resend that fails to actually go out doesn't
  * falsely reset the timer. */
@@ -233,10 +234,11 @@ int ack_socket_recv(int fd, AckRecvResult *out);
 
 /* Reads the source_id src/cipher.c wrote via cipher_set_ack_file(1) for
  * message `seq` in the given direction, from the current working
- * directory (otp_firewalld.c chdir()s to ~/.otp at startup, per
- * otp_fw_setup_keychain_dir(), so this is always relative to the same
- * place cipher.c itself wrote it - see cipher.h's --with-ack-file
- * documentation for the exact filename convention this matches).
+ * directory (this platform's daemon entrypoint chdir()s to ~/.otp at
+ * startup, per otp_fw_setup_keychain_dir(), so this is always relative
+ * to the same place cipher.c itself wrote it - see cipher.h's
+ * --with-ack-file documentation for the exact filename convention this
+ * matches).
  *
  * Deliberately does NOT delete the file (unlike earlier versions of
  * this function): as long as it's still on disk, it - together with
@@ -318,11 +320,9 @@ void ack_discard_source_id_file(const char *contact, size_t seq, int is_encrypt)
  * no matching entry is still marked outstanding with dest_ip "" (egress
  * stays correctly blocked regardless of whether a destination is known).
  *
- * A contact with nothing outstanding (keychain_recover_last() returns
- * KEYCHAIN_RECOVER_NO_COPY) is left untouched - the common, non-crash
- * case. Errors from an individual contact's recovery are logged to
- * stderr and otherwise skipped; this must never abort startup over one
- * contact's state. */
+ * Errors from an individual contact's recovery are logged to stderr and
+ * otherwise skipped; this must never abort startup over one contact's
+ * state. */
 void ack_recover_outstanding(AckTable *t, const FwConfig *cfg);
 
 #endif /* OTP_FW_ACK_H */

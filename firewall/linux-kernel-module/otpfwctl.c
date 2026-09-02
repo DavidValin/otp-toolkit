@@ -4,7 +4,7 @@
  * Equivalent to `echo 1/0 | sudo tee /proc/otp_firewall/enabled` (see
  * otp_firewall.c's enabled_read()/enabled_write()) - both reach the
  * exact same kernel state, this is just the scriptable/status-checking
- * form, matching the otpfwctl each other platform ships.
+ * form, matching the otpfwctl that each other platform ships.
  *
  * Usage: otpfwctl {enable|disable|status}
  */

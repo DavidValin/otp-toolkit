@@ -109,12 +109,12 @@ class OTPFirewallProvider: NEPacketTunnelProvider {
     reloadTimer = timer
   }
 
-  /// Drives the delivery-acknowledgment mechanism (see
-  /// firewall/linux-kernel-module/ack.h): drains the ack sockets and retries any
-  /// message past its ack timeout. A short, frequent tick - unlike the
-  /// 60s config reload above - since the default ack retry timeout is a
-  /// few seconds (see OTP_FW_ACK_DEFAULT_TIMEOUT_SECONDS), mirroring
-  /// firewall/linux-kernel-module/otp_firewalld.c's OTP_FW_TICK_INTERVAL_SECONDS.
+  /// Drives the delivery-acknowledgment mechanism (see ack.h): drains
+  /// the ack sockets and retries any message past its ack timeout. A
+  /// short, frequent tick - unlike the 60s config reload above - since
+  /// the default ack retry timeout is a few seconds (see
+  /// OTP_FW_ACK_DEFAULT_TIMEOUT_SECONDS), mirroring Linux's
+  /// otp_firewalld.c's OTP_FW_TICK_INTERVAL_SECONDS.
   private func startAckTimer() {
     let timer = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
     timer.schedule(deadline: .now() + 1, repeating: 1)
@@ -155,8 +155,8 @@ class OTPFirewallProvider: NEPacketTunnelProvider {
       // ICMPv6 (Neighbor Discovery, MLD, PMTU/error signaling) carries no
       // application data to authenticate and must always pass through
       // untouched in both directions - otherwise IPv6 breaks entirely,
-      // the same reason firewall/linux-kernel-module/otp_firewall.c
-      // exempts it unconditionally. Bypasses the bridge entirely, but
+      // the same reason Linux's otp_firewall.c exempts it
+      // unconditionally. Bypasses the bridge entirely, but
       // NOT the raw-send path for outbound: a packet only reaches this
       // read loop at all because the tunnel intercepted it from the
       // normal routing path (it's configured as the default route), so
