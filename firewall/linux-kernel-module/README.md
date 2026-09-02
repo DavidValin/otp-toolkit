@@ -1,15 +1,18 @@
 # OTP-toolkit Firewall — Linux
 
 A netfilter kernel module (`otp_firewall.ko`) plus a userspace background
-service (`otp-firewalld`), talking to each other over NFQUEUE. For what the
-firewall actually does — what gets encrypted, how a packet is authenticated,
-what gets logged — see [`../README.md`](../README.md). This page covers
+service (`otp_firewalld`) and a control CLI (`otpfwctl`), talking to each
+other over NFQUEUE and `/proc/otp_firewall/`. Everything needed for the
+Linux port — kernel module, daemon, and controller — lives in this one
+directory; nothing is shared from outside it. For what the firewall
+actually does — what gets encrypted, how a packet is authenticated, what
+gets logged — see [`../README.md`](../README.md). This page covers
 building, configuring, and turning the Linux port on and off.
 
 ## Status
 
-Built, compiled, and unit-tested: `tests/` (in this directory) runs 14,348
-checks against `otp-firewalld`'s code, all passing, rebuilt and reverified
+Built, compiled, and unit-tested: `tests/` (in this directory) runs 14,350
+checks against `otp_firewalld`'s code, all passing, rebuilt and reverified
 after every change — including real end-to-end tests (using the actual
 `otp` library, not mocks) of crash/restart recovery for the
 delivery-acknowledgment mechanism (see [`../README.md`'s "Delivery
@@ -34,7 +37,7 @@ watched `dmesg`.
                          └───────────┼────────────────────────────┘
                                      ▼
                          ┌────────────────────────────────────────┐
-                         │   otp-firewalld  (background service)  │
+                         │   otp_firewalld  (background service)  │
                          │                                        │
                          │  outgoing: encrypt for the matched     │
                          │  contact, or block if none is matched  │
@@ -49,7 +52,7 @@ watched `dmesg`.
 `NF_INET_PRE_ROUTING` at a priority ahead of conntrack (incoming). It keeps
 a small in-kernel table of candidate IPs (pushed by the daemon) and drops
 anything that obviously doesn't match, without ever leaving the kernel;
-anything that might be relevant is handed to `otp-firewalld` over a pair of
+anything that might be relevant is handed to `otp_firewalld` over a pair of
 NFQUEUE queues (0 for outgoing, 1 for incoming, by default) for the actual
 encrypt/decrypt decision. IPv6 Neighbor Discovery is exempted directly in
 the kernel module and never reaches the daemon at all - so is the
@@ -75,7 +78,8 @@ The kernel module needs to be built against your exact running kernel:
 From the repository root:
 
 ```
-make firewall-daemon   # builds the background service, bin/otp-firewalld
+make firewall-daemon   # builds the background service, bin/otp_firewalld
+make firewall-ctl      # builds the control CLI, bin/otpfwctl
 make firewall-kmod     # builds the kernel module, otp_firewall.ko
 ```
 
@@ -85,9 +89,9 @@ make firewall-kmod     # builds the kernel module, otp_firewall.ko
 cd firewall/linux-kernel-module/tests && make
 ```
 
-Builds and runs all five unit-test binaries against the daemon's code
+Builds and runs all six unit-test binaries against the daemon's code
 (checksum, pin table, config parsing, trial-decryption ordering, packet
-codec). All 4,273 checks should pass.
+codec, delivery-acknowledgment table). All 14,350 checks should pass.
 
 ## Configure
 
@@ -144,7 +148,7 @@ Advanced: the kernel module and the daemon communicate over a pair of
 numbered NFQUEUE queues (0/1 by default). To change these — e.g. to avoid
 clashing with another NFQUEUE-based tool — pass matching
 `queue_egress=`/`queue_ingress=` module parameters to `insmod` and
-`--queue-egress=`/`--queue-ingress=` flags to `otp-firewalld` (below).
+`--queue-egress=`/`--queue-ingress=` flags to `otp_firewalld` (below).
 
 ### 2. Start the background service
 
@@ -152,7 +156,7 @@ Start it in log-only mode first, so you can see what it *would* do before it
 can actually block anything:
 
 ```
-sudo otp-firewalld --mode=log-only
+sudo otp_firewalld --mode=log-only
 ```
 
 Watch `~/.otp/authorized.log` and `~/.otp/restricted.log` (see
@@ -161,10 +165,10 @@ making the decisions you expect. When you're satisfied, restart it in
 enforcing mode:
 
 ```
-sudo otp-firewalld --mode=enforce
+sudo otp_firewalld --mode=enforce
 ```
 
-Full flag list: `otp-firewalld --help`. Notably: `--config=PATH` to use a
+Full flag list: `otp_firewalld --help`. Notably: `--config=PATH` to use a
 config file other than `~/.otp/firewall.config`, `--resolve-interval=SECONDS`
 to change how often `firewall.config` hostnames are re-resolved (60s by
 default), and `--ack-timeout=SECONDS` to change how long the daemon waits
@@ -177,10 +181,23 @@ Enforcement is a separate step from starting the service, so you always have
 a fast way back if something looks wrong:
 
 ```
-echo 1 | sudo tee /proc/otp_firewall/enabled   # turn on
+sudo otpfwctl enable
 ```
 
+`otpfwctl` talks to `/proc/otp_firewall/enabled` directly; it does not need
+the daemon running to work, since enforcement and the daemon are
+independent (the kernel module drops or queues packets on its own —
+turning enforcement on with no daemon running just means queued packets
+get no verdict and time out closed, not silently passed).
+
 ## Deactivate
+
+```
+sudo otpfwctl disable   # turn off instantly
+otpfwctl status          # confirm
+```
+
+or, equivalently, directly via the `/proc` interface `otpfwctl` itself uses:
 
 ```
 echo 0 | sudo tee /proc/otp_firewall/enabled   # turn off instantly
@@ -198,7 +215,7 @@ sudo rmmod otp_firewall
 ```
 
 This unloads the kernel module (which also turns enforcement off). Then stop
-`otp-firewalld` however you started it (`Ctrl-C`, `systemctl stop`, etc.).
+`otp_firewalld` however you started it (`Ctrl-C`, `systemctl stop`, etc.).
 
 ## Installing system-wide
 
@@ -206,6 +223,6 @@ This unloads the kernel module (which also turns enforcement off). Then stop
 sudo make install-firewall
 ```
 
-Builds both pieces and installs `otp-firewalld` to `/usr/local/bin/`. It
-does not load the kernel module or start the service for you — do that with
-the "Activate" steps above.
+Builds all three pieces and installs `otp_firewalld` and `otpfwctl` to
+`/usr/local/bin/`. It does not load the kernel module or start the service
+for you — do that with the "Activate" steps above.

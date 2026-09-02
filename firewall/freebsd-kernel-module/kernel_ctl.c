@@ -1,8 +1,8 @@
 /*
- * kernel_ctl_freebsd.c - FreeBSD port of firewall/daemon/kernel_ctl.c.
+ * kernel_ctl.c - FreeBSD port of firewall/linux-kernel-module/kernel_ctl.c.
  * Declares the exact same public API as kernel_ctl.h (reused unmodified
- * from firewall/daemon/, same drop-in-replacement pattern as
- * packet_codec_freebsd.c), but pushes the candidate IP set to
+ * from firewall/linux-kernel-module/, same drop-in-replacement pattern as
+ * packet_codec.c), but pushes the candidate IP set to
  * /dev/otp_firewall via OTP_FW_IOC_SET_CANDIDATES instead of writing
  * text to a /proc file.
  *
@@ -59,7 +59,7 @@ int otp_fw_kernel_push_candidates(const FwConfig *cfg)
     }
     else
     {
-      fprintf(stderr, "Warning: kernel_ctl_freebsd: could not parse candidate IP '%s', skipping\n", line);
+      fprintf(stderr, "Warning: kernel_ctl: could not parse candidate IP '%s', skipping\n", line);
     }
     line = strtok_r(NULL, "\n", &save);
   }

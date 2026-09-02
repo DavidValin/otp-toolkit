@@ -15,7 +15,7 @@ extern "C"
 #define OTP_FW_BRIDGE_BUF_CAP 70000
 
   /* What the caller (OTPFirewallProvider.swift) should do with a packet.
-   * Mirrors the verdict logic in firewall/daemon/main.c's egress_cb()/
+   * Mirrors the verdict logic in firewall/linux-kernel-module/otp_firewalld.c's egress_cb()/
    * ingress_cb() - only here it's a return value instead of an NFQUEUE
    * verdict call, since there's no separate kernel piece to hand a
    * verdict back to; this bridge function IS the enforcement point. */
@@ -34,7 +34,7 @@ extern "C"
   int otp_fw_bridge_setup(void);
 
   /* Re-parses and re-resolves firewall.config, and reconciles the pin
-   * table against it (see main.c's reload_config_and_push() on Linux -
+   * table against it (see otp_firewalld.c's reload_config_and_push() on Linux -
    * same idea, minus the kernel candidate-table push, which has no
    * macOS equivalent: there's no separate kernel-side prefilter here,
    * every packet already reaches this bridge). Call periodically (e.g.
@@ -66,7 +66,7 @@ extern "C"
    * pkt_len unchanged; on DROP, send nothing.
    * enforce_mode: 1 for real enforcement, 0 for log-only (observe/log
    * without ever calling the real cipher - see
-   * firewall/daemon/packet_codec.h's classify functions for why). */
+   * firewall/linux-kernel-module/packet_codec.h's classify functions for why). */
   otp_fw_action_t otp_fw_bridge_process_outbound(const uint8_t *pkt, int pkt_len,
                                                  uint8_t *out_buf, int out_cap, int *out_len,
                                                  int enforce_mode);
@@ -101,12 +101,12 @@ extern "C"
    * errno). `pkt`/`pkt_len` is the complete IP packet (header included). */
   int otp_fw_bridge_send_raw(const uint8_t *pkt, int pkt_len, int family);
 
-  /* Delivery-acknowledgment tick (see firewall/daemon/ack.h): drains
+  /* Delivery-acknowledgment tick (see firewall/linux-kernel-module/ack.h): drains
    * both ack sockets (processing any ACK/REDELIVER packets waiting) and
    * retries any outstanding message past its ack timeout. Call this
    * periodically from Swift (e.g. a DispatchSourceTimer firing every
    * ~1 second) - there's no select()/poll()-style event loop on this
-   * side the way firewall/daemon/main.c has, so this is deliberately a
+   * side the way firewall/linux-kernel-module/otp_firewalld.c has, so this is deliberately a
    * poll-and-return call rather than a blocking one. A no-op before
    * otp_fw_bridge_setup() completes. Unlike the ICMPv6 exemption, the
    * ack sockets need NO special Swift-side "let this bypass the tunnel"

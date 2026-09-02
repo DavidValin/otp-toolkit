@@ -6,6 +6,17 @@ gets encrypted, how a packet is authenticated, what gets logged — see
 [`../README.md`](../README.md). This page covers building, configuring, and
 turning the macOS port on and off.
 
+Everything needed for the macOS port lives in this one directory; nothing
+is shared from outside it. Unlike the other three platforms, there is no
+separate `otp_firewalld` daemon binary or `otpfwctl` control CLI here —
+the entire firewall (packet interception and the encrypt/decrypt/candidate
+logic) runs inside the single System Extension process itself, and the
+only control surface Apple's Network Extension model actually offers is
+the host app calling `NEVPNManager`/`NETunnelProviderManager`, so the
+sample app (`App/`) is the controller. This is a deliberate difference
+from Linux/Windows/FreeBSD, not a gap: there is no kernel module or
+sysctl/ioctl/procfs surface on this platform to wrap in a CLI at all.
+
 There is no supported kernel-module mechanism left on macOS to build this
 firewall as actual kernel code: the old mechanism (KEXTs / Network Kernel
 Extensions) is deprecated, barely functional on Apple Silicon without
@@ -47,7 +58,7 @@ headers or documentation. In descending order of how much it matters:
    method names like `readPacketObjects`/`writePacketObjects`, and
    `NEPacket.direction`/`.protocolFamily`'s exact types. See the
    confidence notes at the top of that file.
-4. Everything in `Shared/packet_codec_macos.c` (the BSD header struct
+4. Everything in `Shared/packet_codec.c` (the BSD header struct
    field names — `struct ip`'s `ip_hl`/`ip_p`, `struct tcphdr`'s
    `th_sport`/`th_off`, `struct udphdr`'s `uh_sport`/`uh_ulen`) is
    well-established, decades-stable BSD sockets API — this is the part
@@ -62,7 +73,7 @@ headers or documentation. In descending order of how much it matters:
    logged `-` instead of the contact's name.
 5. **`ack.h`/`.c`** (the delivery-acknowledgment mechanism - see
    [`../README.md`'s "Delivery acknowledgment"](../README.md#delivery-acknowledgment))
-   is reused completely unmodified from `firewall/daemon/`, same as
+   is byte-identical to Linux's copy of the same files, same as
    `pin.c`/`config.c` - it's plain POSIX sockets code with no
    platform-specific branches, and its table logic — including
    crash/restart recovery via `ack_recover_outstanding()`, exercised with
@@ -113,13 +124,23 @@ has no packet-queue equivalent to build one on top of.
 
 ## What's reused unmodified vs. what's new
 
-`cipher.c`/`keychain.c`/`commit.c` (the actual OTP crypto/keychain library)
-need **zero changes** — `src/compat.h` branches purely on `_WIN32` vs. real
-POSIX, and macOS is genuine POSIX (BSD-derived).
+Every platform's firewall code lives entirely in its own directory now —
+there is no shared `firewall/daemon/` directory anywhere in this
+repository. Instead, the platform-agnostic daemon-support files started as
+Linux's implementation and are duplicated, filename-for-filename, into
+every platform's own folder; keeping them byte-identical across platforms
+(verified by diffing against Linux's copies) is a convention this project
+follows, not something the build system enforces.
 
-Of `firewall/daemon/`'s own files, everything is pure POSIX C **except**
-`packet_codec.c`, which uses Linux/glibc struct field names directly. So the
-Xcode project references these files **directly, by reference, unmodified**:
+`cipher.c`/`keychain.c`/`commit.c` (from `src/`, two directories further
+up — the actual OTP crypto/keychain library) need **zero changes** —
+`src/compat.h` branches purely on `_WIN32` vs. real POSIX, and macOS is
+genuine POSIX (BSD-derived).
+
+Of the daemon-support files in this directory, everything is pure POSIX C
+**except** `packet_codec.c`, which uses Linux/glibc struct field names
+directly. So the Xcode project references these files **directly, by
+reference, unmodified**, byte-identical to Linux's copies:
 
 - `common.h`, `checksum.h`/`.c`, `config.h`/`.c`, `pin.h`/`.c`,
   `trial.h`/`.c`, `keychain_setup.h`/`.c`, `log.h`/`.c`, `ack.h`/`.c`
@@ -128,9 +149,11 @@ Xcode project references these files **directly, by reference, unmodified**:
   `packet_codec.h` (just the header — its declared API has no
   platform-specific types)
 
-...and compiles `Shared/packet_codec_macos.c` (this directory) **instead
-of** `firewall/daemon/packet_codec.c` — same public API, BSD header field
-names.
+...and compiles `Shared/packet_codec.c` (this directory's own
+macOS-specific body, named identically to Linux's file — no `_macos`
+suffix, the containing directory is what identifies the platform now)
+**instead of** Linux's `packet_codec.c` — same public API, BSD header
+field names.
 
 New for macOS, in this directory:
 
@@ -169,9 +192,9 @@ to open than something useful. Create the project shell yourself:
 3. In Xcode: **File > New > Project > App**, then **File > New > Target >
    Network Extension** (choose Packet Tunnel) to add the extension
    target, embedded in the app.
-4. Add the reused `firewall/daemon/*` files listed above, plus everything
-   in this directory's `Shared/` and `Extension/`, to the extension
-   target. Add `App/*` to the app target.
+4. Add the daemon-support files listed above (they live directly in this
+   directory), plus everything in this directory's `Shared/` and
+   `Extension/`, to the extension target. Add `App/*` to the app target.
 5. Set the extension target's **Objective-C Bridging Header** build
    setting to `OTPFirewallExtension-Bridging-Header.h`.
 6. Set both targets' entitlements file (Signing & Capabilities) to the

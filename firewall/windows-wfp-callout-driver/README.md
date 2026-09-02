@@ -58,7 +58,7 @@ descending order of how much the remaining uncertainty matters:
    WDM patterns (`IoCreateDevice`, `IRP_MJ_DEVICE_CONTROL`,
    `IoCsqInitializeEx`, a spinlock-protected array). Highest-confidence part
    of the driver.
-5. **`Service/otp_firewall_svc.c` and `Ctl/otpfwctl.c`** — ordinary Win32
+5. **`Service/otp_firewalld.c` and `Ctl/otpfwctl.c`** — ordinary Win32
    (SCM service boilerplate, `DeviceIoControl`, `CreateFileA`). Medium-high
    confidence in the API usage itself; the genuinely new design point (not
    a portability risk, a real architecture decision) is that the service
@@ -69,8 +69,11 @@ descending order of how much the remaining uncertainty matters:
    state is serialized with an explicit `CRITICAL_SECTION`.
 6. **`ack.h`/`.c`** (the delivery-acknowledgment mechanism — see
    [`../README.md`'s "Delivery acknowledgment"](../README.md#delivery-acknowledgment))
-   is reused completely unmodified from `firewall/daemon/` — its table
-   logic, including crash/restart recovery via `ack_recover_outstanding()`
+   is byte-identical to Linux's copy of the same files (there's no shared
+   directory these are pulled from — every platform keeps its own copy in
+   sync by convention, see "What's reused unmodified vs. what's new"
+   below) — its table logic, including crash/restart recovery via
+   `ack_recover_outstanding()`
    (exercised with the real `otp` library, not mocks), is covered by
    `firewall/linux-kernel-module/tests/test_ack.c` (10,000+ checks
    passing as part of the Linux daemon's own test suite), and its
@@ -102,7 +105,7 @@ deliverable.
                          └───────────┼─────────────────────────────┘
                                      │ \\.\OTPFirewall (custom IOCTL queue)
                          ┌───────────▼─────────────────────────────┐
-                         │   otp_firewall_svc.exe  (Windows        │
+                         │   otp_firewalld.exe  (Windows           │
                          │   Service, userspace)                   │
                          │                                         │
                          │  outgoing: encrypt for the matched      │
@@ -127,16 +130,25 @@ lets through untouched in both directions.
 
 ## What's reused unmodified vs. what's new
 
-`cipher.c`/`keychain.c`/`commit.c` need **zero changes** — `src/compat.h`
-already branches cleanly on `_WIN32` vs. real POSIX, and this project's own
-`make mingw` target already proves out warning-free MinGW-w64
-cross-compilation of the core library.
+Every platform's firewall code lives entirely in its own directory now —
+there is no shared `firewall/daemon/` directory anywhere in this
+repository. Instead, the platform-agnostic daemon-support files started as
+Linux's implementation and are duplicated, filename-for-filename, into
+every platform's own folder; keeping them byte-identical across platforms
+(verified by diffing against Linux's copies) is a convention this project
+follows, not something the build system enforces.
 
-Of `firewall/daemon/`'s own files, small additive `#ifdef _WIN32` guards
-(header swaps, `gmtime_s` vs. `gmtime_r`, `_mkdir`/`_chdir`,
-`CreateSymbolicLinkA` in place of `symlink()`) were enough to make these
-build for Windows too — reused **directly, unmodified beyond those
-guards**:
+`cipher.c`/`keychain.c`/`commit.c` (from `src/`, one directory further up)
+need **zero changes** — `src/compat.h` already branches cleanly on
+`_WIN32` vs. real POSIX, and this project's own `make mingw` target
+already proves out warning-free MinGW-w64 cross-compilation of the core
+library.
+
+Of the daemon-support files in this directory, small additive `#ifdef
+_WIN32` guards (header swaps, `gmtime_s` vs. `gmtime_r`, `_mkdir`/`_chdir`,
+`CreateSymbolicLinkA` in place of `symlink()`) were enough to make Linux's
+originals build for Windows too — these are byte-identical to Linux's
+copies beyond those guards:
 
 - `common.h`, `checksum.h`/`.c`, `config.h`/`.c`, `pin.h`/`.c`,
   `trial.h`/`.c`, `keychain_setup.h`/`.c`, `log.h`/`.c`, `ack.h`/`.c`
@@ -144,14 +156,15 @@ guards**:
   WinSock socket calls), `packet_codec.h`, `kernel_ctl.h` (just the
   headers where only a `.c` needed a platform-specific body)
 
-...and compile **instead of** `firewall/daemon/packet_codec.c` and
-`firewall/daemon/kernel_ctl.c` respectively:
+...and this directory provides Windows-specific bodies for the two that
+need one, named identically to their Linux counterparts (no `_windows`
+suffix — the containing directory is what identifies the platform now):
 
-- `Shared/packet_codec_windows.c` — same public API as `packet_codec.h`,
+- `Shared/packet_codec.c` — same public API as `packet_codec.h`,
   but with this project's own `#pragma pack(push,1)` IPv4/IPv6/TCP/UDP
   wire-format structs instead of relying on any OS-provided header (Windows
   has no standard `struct iphdr`/`struct ip` the way POSIX systems do).
-- `Service/kernel_ctl_windows.c` — same public API as `kernel_ctl.h`, but
+- `Service/kernel_ctl.c` — same public API as `kernel_ctl.h`, but
   pushes the candidate IP set to `\\.\OTPFirewall` via `DeviceIoControl`
   instead of writing text to a `/proc` file.
 
@@ -165,13 +178,14 @@ New for Windows, in this directory:
   candidate-IP table, the kernel-side ICMPv6 and delivery-ack-port
   exemptions, the kill switch, and the packet pend/queue/verdict
   machinery.
-- `Service/otp_firewall_svc.c` — the userspace Windows Service: startup,
-  config/keychain reload, the loop moving packets between the driver
-  and the codec/cipher/keychain code, and a third thread
-  (`AckThreadProc`) driving `ack.h`'s delivery-acknowledgment mechanism
-  via WinSock's `select()`.
+- `Service/otp_firewalld.c` — the userspace Windows Service (same name as
+  every other platform's daemon): startup, config/keychain reload, the
+  loop moving packets between the driver and the codec/cipher/keychain
+  code, and a third thread (`AckThreadProc`) driving `ack.h`'s
+  delivery-acknowledgment mechanism via WinSock's `select()`.
 - `Ctl/otpfwctl.c` — `otpfwctl.exe {enable|disable|status}`, the kill
-  switch control utility (see "Deactivate" below).
+  switch control utility (same name as every other platform's control
+  CLI — see "Deactivate" below).
 
 ## Compile
 
@@ -187,14 +201,16 @@ source.
 
 ### 2. Build the service and control tool
 
-Compile `Service/otp_firewall_svc.c` (plus the reused `firewall/daemon/*`
-files listed above and `Shared/packet_codec_windows.c`, `Service/kernel_ctl_windows.c`)
-into `otp_firewall_svc.exe` using a normal Win32 console/service project,
-and `Ctl/otpfwctl.c` into `otpfwctl.exe`. `Shared/packet_codec_windows.c`
-uses `fmemopen()`/`open_memstream()` (POSIX.1-2008), which MinGW-w64
-provides but raw MSVC's CRT does not — building the service with MinGW
-(the same toolchain this project's own `make mingw` target already
-cross-compiles the core library with) is assumed throughout that file.
+Compile `Service/otp_firewalld.c` (plus the daemon-support files listed
+above and `Shared/packet_codec.c`, `Service/kernel_ctl.c` — everything
+needed lives directly in this directory now, no other directory's sources
+are involved except `src/`) into `otp_firewalld.exe` using a normal Win32
+console/service project, and `Ctl/otpfwctl.c` into `otpfwctl.exe`.
+`Shared/packet_codec.c` uses `fmemopen()`/`open_memstream()`
+(POSIX.1-2008), which MinGW-w64 provides but raw MSVC's CRT does not —
+building the service with MinGW (the same toolchain this project's own
+`make mingw` target already cross-compiles the core library with) is
+assumed throughout that file.
 
 ## Test-sign and load the driver
 
@@ -228,10 +244,12 @@ machine — there is nothing here to submit to Microsoft or wait on.
    Import-Certificate -FilePath otpfw_test.cer -CertStoreLocation "Cert:\LocalMachine\TrustedPublisher"
    signtool sign /v /s My /n "OTP-toolkit Firewall Test" /fd SHA256 otp_firewall_driver.sys
    ```
-3. **Install and start the driver**:
+3. **Install and start the driver** (a different SCM service name than the
+   userspace service below — `OTPFirewallDriver`, not `OTPFirewall` —
+   since a kernel driver and a Win32 service can't share one SCM entry):
    ```
-   sc create OTPFirewall type= kernel binPath= "C:\path\to\otp_firewall_driver.sys"
-   sc start OTPFirewall
+   sc create OTPFirewallDriver type= kernel binPath= "C:\path\to\otp_firewall_driver.sys"
+   sc start OTPFirewallDriver
    ```
    The driver starts **disabled** — nothing about your network changes yet.
 
@@ -260,9 +278,14 @@ otp -ac alice <enc-key-file> <dec-key-file>
 ### 1. Start the service
 
 ```
-sc create OTPFirewallSvc binPath= "C:\path\to\otp_firewall_svc.exe" start= demand
-sc start OTPFirewallSvc
+sc create OTPFirewall binPath= "C:\path\to\otp_firewalld.exe" start= demand
+sc start OTPFirewall
 ```
+
+(the service name passed to `sc create`/`sc start` must match
+`OTP_FW_SVC_NAME` in `Service/otp_firewalld.c` exactly — both currently say
+`OTPFirewall` — since `StartServiceCtrlDispatcher`'s dispatch table is
+keyed on that exact string.)
 
 ### 2. Turn the firewall on
 
@@ -288,14 +311,14 @@ This takes effect immediately and doesn't require stopping the service or
 unloading the driver — it's the fastest way to get your normal network back
 if anything looks wrong.
 
-To fully remove it:
+To fully remove it (both the userspace service and the driver):
 
 ```
 otpfwctl.exe disable
-sc stop OTPFirewallSvc
 sc stop OTPFirewall
-sc delete OTPFirewallSvc
 sc delete OTPFirewall
+sc stop OTPFirewallDriver
+sc delete OTPFirewallDriver
 ```
 
 Then, if you're done testing, revert test-signing mode

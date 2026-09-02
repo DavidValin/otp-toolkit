@@ -1,8 +1,8 @@
 /*
- * kernel_ctl_windows.c - Windows port of firewall/daemon/kernel_ctl.c.
+ * kernel_ctl.c - Windows port of firewall/linux-kernel-module/kernel_ctl.c.
  * Declares the exact same public API as kernel_ctl.h (reused unmodified
- * from firewall/daemon/, same drop-in-replacement pattern as
- * packet_codec_windows.c), but pushes the candidate IP set to
+ * from firewall/linux-kernel-module/, same drop-in-replacement pattern as
+ * packet_codec.c), but pushes the candidate IP set to
  * \\.\OTPFirewall via DeviceIoControl(OTP_FW_IOCTL_SET_CANDIDATES)
  * instead of writing text to /proc/otp_firewall/candidates.
  *
@@ -58,7 +58,7 @@ int otp_fw_kernel_push_candidates(const FwConfig *cfg)
     }
     else
     {
-      fprintf(stderr, "Warning: kernel_ctl_windows: could not parse candidate IP '%s', skipping\n", line);
+      fprintf(stderr, "Warning: kernel_ctl: could not parse candidate IP '%s', skipping\n", line);
     }
     line = strtok_s(NULL, "\n", &save);
   }

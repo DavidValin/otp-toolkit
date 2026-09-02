@@ -5,7 +5,7 @@
  * candidate-IP + ICMPv6 check, and for anything else pends the WFP
  * classify and hands the packet to userspace (Service/) over
  * \\.\OTPFirewall, exactly like the Linux module hands packets to
- * otp-firewalld over NFQUEUE. All crypto/keychain logic stays in
+ * otp_firewalld over NFQUEUE. All crypto/keychain logic stays in
  * userspace, same as every other platform in this project - this file
  * never reads cipher.c or the keychain.
  *
@@ -333,14 +333,14 @@ static void OtpFwClassifyCommon(
 
   /* ICMPv6 exemption lives here, in the kernel fast path, never in
    * userspace - see otp_firewall_driver.h's OtpFwIsIcmpv6 comment and
-   * Shared/packet_codec_windows.c's matching forward-reference. */
+   * Shared/packet_codec.c's matching forward-reference. */
   if (is_v6 && OtpFwIsIcmpv6(l4_proto))
   {
     classifyOut->actionType = FWP_ACTION_PERMIT;
     return;
   }
 
-  /* Ack-port traffic (firewall/daemon/ack.h's delivery-acknowledgment
+  /* Ack-port traffic (firewall/linux-kernel-module/ack.h's delivery-acknowledgment
    * side channel) must never be routed through the encrypt/decrypt
    * pipeline - it's this service's own control traffic, not application
    * data, the same reasoning as the ICMPv6 exemption above. A single
@@ -348,7 +348,7 @@ static void OtpFwClassifyCommon(
    * correctly in both directions - see otp_firewall.c's identical
    * check and comment on the Linux side for the full reasoning (this is
    * the same wire port number, defined in
-   * firewall/daemon/common.h/OTP_FW_ACK_PORT - not otherwise reachable
+   * firewall/linux-kernel-module/common.h/OTP_FW_ACK_PORT - not otherwise reachable
    * from this kernel-mode translation unit, so repeated here as a raw
    * literal with the value called out explicitly to keep the two in
    * sync by inspection). 17 is IPPROTO_UDP; this file has no existing
@@ -405,7 +405,7 @@ static void OtpFwClassifyCommon(
   if (total_len > OTP_FW_MAX_PACKET)
   {
     /* Pre-check bound, same purpose as OTP_FW_MAX_GROWTH in
-     * packet_codec_windows.c: refuse before spending any real work
+     * packet_codec.c: refuse before spending any real work
      * (here: before pending the classify at all) on a packet too big
      * to ever fit the fixed-size IOCTL buffer. */
     ExFreePoolWithTag(pkt, OTP_FW_POOL_TAG);

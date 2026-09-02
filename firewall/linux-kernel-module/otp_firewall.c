@@ -4,7 +4,7 @@
  * Deliberately thin: this module never touches packet payload bytes, does
  * no crypto and no file I/O. Its only job is a fast in-kernel "is this
  * source/destination IP a keychain contact" check, and handing candidate
- * packets to userspace (otp-firewalld) via the standard NFQUEUE verdict -
+ * packets to userspace (otp_firewalld) via the standard NFQUEUE verdict -
  * the actual trial-decryption, packet growth/shrink and checksum work all
  * happen there, reusing the existing (unmodified) otp cipher/keychain
  * library. See README.md in this directory ("Architecture") for the full design and why it's split
@@ -139,7 +139,7 @@ static int otp_fw_is_icmpv6(struct sk_buff *skb)
   return ip6h->nexthdr == IPPROTO_ICMPV6;
 }
 
-/* Ack-port traffic (firewall/daemon/ack.h's delivery-acknowledgment
+/* Ack-port traffic (firewall/linux-kernel-module/ack.h's delivery-acknowledgment
  * side channel) must never be routed through the encrypt/decrypt
  * pipeline - it's this daemon's own control traffic, not application
  * data, the same reasoning as the ICMPv6 exemption above. A single
@@ -234,7 +234,7 @@ static int otp_fw_extract(struct sk_buff *skb, int dir_egress, u8 *family,
 /* Builds the NFQUEUE verdict by hand rather than using the kernel's
  * NF_QUEUE_NR() helper: that helper sets NF_VERDICT_FLAG_QUEUE_BYPASS,
  * which silently ACCEPTs a candidate packet if no userspace listener has
- * opened this queue number (e.g. otp-firewalld isn't running yet, or
+ * opened this queue number (e.g. otp_firewalld isn't running yet, or
  * crashed). For a default-deny firewall that is the wrong failure mode -
  * a candidate packet with nothing to validate it must fail closed
  * (dropped), not bypass straight through. */

@@ -1,5 +1,5 @@
 /*
- * packet_codec_macos.c - macOS port of firewall/daemon/packet_codec.c.
+ * packet_codec.c - macOS port of firewall/linux-kernel-module/packet_codec.c.
  *
  * UNVERIFIED: written without access to a macOS SDK/Xcode/compiler - see
  * ../README.md for the full list of what that means here. The only
@@ -18,9 +18,9 @@
  * helpers below, which are the only functions actually rewritten here.
  *
  * This file declares the exact same public API as packet_codec.h
- * (reused unmodified from firewall/daemon/ - it declares no
+ * (reused unmodified from firewall/linux-kernel-module/ - it declares no
  * Linux-specific types), so it's a drop-in replacement: the Xcode
- * project compiles this file instead of firewall/daemon/packet_codec.c.
+ * project compiles this file instead of firewall/linux-kernel-module/packet_codec.c.
  */
 
 #include "packet_codec.h"

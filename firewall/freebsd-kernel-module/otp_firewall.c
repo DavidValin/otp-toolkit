@@ -3,7 +3,7 @@
  * hooks at the IP input/output points (the FreeBSD equivalent of
  * netfilter hooks), does a fast in-kernel "is this source/destination a
  * keychain contact" check plus the ICMPv6 exemption, and for anything
- * else consumes the mbuf and hands it to userspace (otp_firewalld_freebsd)
+ * else consumes the mbuf and hands it to userspace (otp_firewalld)
  * over a custom character device (/dev/otp_firewall) - FreeBSD has no
  * NFQUEUE equivalent to lean on, so this queue (like Windows' IOCTL
  * queue) is invented for this project. All crypto/keychain logic stays
@@ -124,7 +124,7 @@ otp_fw_set_candidates(const otp_fw_candidate_t *list, uint32_t count)
  * BOTH a sysctl (net.otp_firewall.enabled - the idiomatic FreeBSD way to
  * flip a scalar kernel setting, e.g. `sysctl net.otp_firewall.enabled=1`
  * works with no separate control tool) and the ioctl below (for
- * otpfwctl_freebsd to use programmatically) - same underlying variable,
+ * otpfwctl to use programmatically) - same underlying variable,
  * two entry points, matching the two ways an operator naturally reaches
  * for a FreeBSD kernel toggle. */
 static int g_enabled = 0;
@@ -199,7 +199,7 @@ otp_fw_is_icmpv6(struct mbuf *m)
 }
 
 /* Checks whether `*mp`'s UDP destination port equals OTP_FW_ACK_PORT -
- * firewall/daemon/ack.h's delivery-acknowledgment side channel,
+ * firewall/linux-kernel-module/ack.h's delivery-acknowledgment side channel,
  * exempted from the encrypt/decrypt pipeline the same way ICMPv6 is
  * exempted above (see otp_firewall_proto.h for the shared port
  * number). Only meaningful once the caller has already confirmed the

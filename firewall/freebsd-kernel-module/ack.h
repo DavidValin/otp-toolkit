@@ -135,7 +135,7 @@ void ack_clear_contact(AckTable *t, const char *contact);
  * (its header bytes are what the caller needs to reconstruct the
  * packet). The caller is expected to actually resend it (fetching the
  * matching ciphertext via keychain_recover_last(contact, 1, ...) and
- * concatenating it after `slot->header` - see main.c) and, on a
+ * concatenating it after `slot->header` - see otp_firewalld.c) and, on a
  * successful resend, call ack_touch_retry() to reset this slot's clock
  * - ack_scan_timeouts() only identifies candidates, it never touches
  * sent_at itself, so a resend that fails to actually go out doesn't
@@ -233,7 +233,7 @@ int ack_socket_recv(int fd, AckRecvResult *out);
 
 /* Reads the source_id src/cipher.c wrote via cipher_set_ack_file(1) for
  * message `seq` in the given direction, from the current working
- * directory (main.c chdir()s to ~/.otp at startup, per
+ * directory (otp_firewalld.c chdir()s to ~/.otp at startup, per
  * otp_fw_setup_keychain_dir(), so this is always relative to the same
  * place cipher.c itself wrote it - see cipher.h's --with-ack-file
  * documentation for the exact filename convention this matches).

@@ -1,5 +1,5 @@
 /*
- * otp_firewalld_freebsd.c - FreeBSD port of firewall/daemon/main.c: same
+ * otp_firewalld.c - FreeBSD port of firewall/linux-kernel-module/otp_firewalld.c: same
  * role (startup, config/keychain reload, the loop moving packets
  * between the kernel and packet_codec/cipher/keychain), but reading
  * candidate packets from /dev/otp_firewall via read()/write() instead of
@@ -9,8 +9,8 @@
  * read() on a blocking cdev returns EINTR on a delivered signal with no
  * SA_RESTART, exactly like Linux's recv() on an NFQUEUE socket - so the
  * same single-threaded, SIGALRM-driven periodic-reload design from
- * firewall/daemon/main.c ports over directly. This file is close to a
- * line-for-line adaptation of main.c with the NFQUEUE-specific pieces
+ * firewall/linux-kernel-module/otp_firewalld.c ports over directly. This file is close to a
+ * line-for-line adaptation of otp_firewalld.c with the NFQUEUE-specific pieces
  * (nfq_open/nfq_create_queue/nfq_handle_packet) replaced by
  * open()/read()/write()/ioctl() on /dev/otp_firewall, and select()
  * added over that fd plus the two delivery-ack sockets (see ack.h) -
@@ -52,7 +52,7 @@
 
 /* How often the main loop wakes up to check for ack timeouts (see
  * ack.h), independent of --resolve-interval - same reasoning as
- * firewall/daemon/main.c's identical constant: the default 5-second ack
+ * firewall/linux-kernel-module/otp_firewalld.c's identical constant: the default 5-second ack
  * retry timeout needs checking far more often than the default
  * 60-second DNS re-resolve interval, so this drives a short, fixed tick
  * instead of trying to run two independent alarm(2) timers. */
@@ -114,7 +114,7 @@ static void reconcile_pins_with_config(FwContext *ctx)
   }
 }
 
-/* Mirrors main.c's reconcile_acks_with_keychain(): a stale
+/* Mirrors otp_firewalld.c's reconcile_acks_with_keychain(): a stale
  * outstanding-ack slot (see ack.h) for a contact no longer in the
  * keychain is harmless but pointless to keep around. */
 static void reconcile_acks_with_keychain(FwContext *ctx)
@@ -131,7 +131,7 @@ static void reconcile_acks_with_keychain(FwContext *ctx)
   }
 }
 
-/* Mirrors main.c's reload_config_and_push() exactly, including the
+/* Mirrors otp_firewalld.c's reload_config_and_push() exactly, including the
  * keychain snapshot/restore-on-failure fix documented there in detail -
  * see that file for why it's load-bearing. */
 static void reload_config_and_push(FwContext *ctx, const char *config_path)
@@ -162,7 +162,7 @@ static otp_fw_result_t process_ingress_packet(FwContext *ctx, const unsigned cha
                                               const char *src_ip, unsigned char *out_data, int out_cap,
                                               int *out_len, char *contact_out, size_t contact_out_size)
 {
-  /* static: CandidateList is too large for a stack local - see main.c's
+  /* static: CandidateList is too large for a stack local - see otp_firewalld.c's
    * matching comment. Safe to share: trial_select_primary() rebuilds it
    * from scratch every call and this daemon is single-threaded. */
   static CandidateList candidates;
@@ -283,12 +283,12 @@ static void retry_outstanding_message(const AckSlot *slot, void *user_data)
 
 /* Drains every packet currently queued on the ack socket (see ack.h),
  * non-blocking - called once per select() readability notification, but
- * loops until EAGAIN rather than reading just one, matching main.c's
+ * loops until EAGAIN rather than reading just one, matching otp_firewalld.c's
  * identical reasoning. */
 static void drain_ack_socket(FwContext *ctx, int fd)
 {
   /* static: AckRecvResult embeds a 70000-byte reconstruction buffer
-   * (OTP_FW_ACK_MAX_REDELIVER) - see main.c's identical reasoning for
+   * (OTP_FW_ACK_MAX_REDELIVER) - see otp_firewalld.c's identical reasoning for
    * why this must not be a stack local. */
   static AckRecvResult res;
   for (;;)
@@ -372,7 +372,7 @@ int main(int argc, char **argv)
     fprintf(stderr, "Error: failed to load keychain\n");
     return 1;
   }
-  /* Required for the same reason main.c documents at length: without
+  /* Required for the same reason otp_firewalld.c documents at length: without
    * this, encrypt/decrypt_with_contact() block on an interactive
    * delivery-confirmation prompt this daemon, with no terminal, can
    * never answer. Genuinely true by the time it's consulted, though,
@@ -383,7 +383,7 @@ int main(int argc, char **argv)
   if (otp_fw_log_init() != 0)
     return 1;
 
-  /* AF_INET must succeed - see main.c's identical reasoning. AF_INET6
+  /* AF_INET must succeed - see otp_firewalld.c's identical reasoning. AF_INET6
    * is best-effort. */
   int ack_fd4 = ack_socket_open(AF_INET);
   if (ack_fd4 < 0)
@@ -405,7 +405,7 @@ int main(int argc, char **argv)
   reload_config_and_push(&ctx, config_path);
 
   /* Crash/restart recovery - see ack.h's ack_recover_outstanding() doc
-   * comment and main.c's identical call. Must run before the device is
+   * comment and otp_firewalld.c's identical call. Must run before the device is
    * opened and any real traffic is processed. */
   ack_recover_outstanding(&ctx.acks, &ctx.cfg);
 
@@ -418,7 +418,7 @@ int main(int argc, char **argv)
   }
 
   /* sigaction() with sa_flags=0 (SA_RESTART deliberately omitted), same
-   * reasoning as main.c: this relies on select() actually returning
+   * reasoning as otp_firewalld.c: this relies on select() actually returning
    * EINTR so the periodic tick below runs and shutdown doesn't stall
    * until the next packet. */
   struct sigaction sa_alarm, sa_term;
@@ -432,7 +432,7 @@ int main(int argc, char **argv)
   alarm(OTP_FW_TICK_INTERVAL_SECONDS);
 
   time_t last_resolve = time(NULL);
-  fprintf(stderr, "otp_firewalld_freebsd: running (mode=%s, ack-timeout=%ds)\n",
+  fprintf(stderr, "otp_firewalld: running (mode=%s, ack-timeout=%ds)\n",
          mode == OTP_FW_MODE_ENFORCE ? "enforce" : "log-only", ack_timeout);
 
   static otp_fw_dequeued_packet_t in_buf;
@@ -441,7 +441,7 @@ int main(int argc, char **argv)
   while (!g_shutdown)
   {
     /* Checked unconditionally at the top of every iteration, not only
-     * inside the EINTR branch - same reasoning as main.c: under
+     * inside the EINTR branch - same reasoning as otp_firewalld.c: under
      * sustained traffic, select() keeps finding data ready and returns
      * normally rather than blocking, so a SIGALRM landing mid-select()
      * (or mid packet-processing) would otherwise never get picked up
@@ -515,7 +515,7 @@ int main(int argc, char **argv)
     {
       /* Free (no key spent) contact resolution first, so the
        * delivery-ack gate (see ack.h) can reject a packet BEFORE ever
-       * calling the real, key-spending encrypt - see main.c's identical
+       * calling the real, key-spending encrypt - see otp_firewalld.c's identical
        * reasoning. log-only must never call the real
        * encrypt_with_contact() either, for the usual reason (spends
        * real key material for output that's about to be discarded). */
@@ -537,7 +537,7 @@ int main(int argc, char **argv)
         if (ctx.mode == OTP_FW_MODE_ENFORCE)
         {
           /* Track this message for delivery acknowledgment - see
-           * main.c's identical reasoning. */
+           * otp_firewalld.c's identical reasoning. */
           int header_len = otp_fw_header_length(in_buf.data, (int)in_buf.data_len);
           Contact *c = find_contact(contact);
           unsigned char source_id[OTP_FW_ACK_SOURCE_ID_LEN];

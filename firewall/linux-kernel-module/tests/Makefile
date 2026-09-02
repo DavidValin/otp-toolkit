@@ -1,6 +1,6 @@
 # Userspace unit tests for the OTP_TOOLKIT_FIREWALL daemon logic
-# (firewall/daemon/*.c) - see ../README.md and README.md in this
-# directory. Run with `make` or `make test`.
+# (../*.c, i.e. firewall/linux-kernel-module/*.c) - see ../README.md and
+# README.md in this directory. Run with `make` or `make test`.
 #
 # These link the real, unmodified core library (src/cipher.c,
 # src/keychain.c, src/commit.c) exactly as the daemon itself does, plus
@@ -9,7 +9,7 @@
 
 CC := gcc
 CFLAGS := -O0 -g -Wall -D_FILE_OFFSET_BITS=64
-DAEMON := ../../daemon
+DAEMON := ..
 SRC := ../../../src
 INCLUDES := -I. -I$(DAEMON) -I$(SRC)
 

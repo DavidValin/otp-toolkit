@@ -1,26 +1,34 @@
 /*
- * packet_codec_freebsd.c - FreeBSD port of firewall/daemon/packet_codec.c.
+ * packet_codec.c - Windows port of firewall/linux-kernel-module/packet_codec.c.
  *
- * UNVERIFIED (not built on a real FreeBSD machine), but the highest
- * confidence file in this whole port: FreeBSD's <netinet/ip.h>/
- * <netinet/tcp.h>/<netinet/udp.h>/<netinet/ip6.h> are the reference BSD
- * sockets networking headers - the same struct ip/ip_hl/ip_p,
- * struct tcphdr/th_sport/th_off, struct udphdr/uh_sport/uh_ulen,
- * struct ip6_hdr/ip6_nxt/ip6_plen field names Darwin (macOS) itself
- * derives from, decades-stable and unchanged across the BSD family. This
- * file is therefore closer to a straight copy of
- * ../../macos-kernel-module/Shared/packet_codec_macos.c than a genuine
- * rewrite - only this header comment and the include list differ; every
- * function body is identical. Every non-header-name-dependent function
+ * UNVERIFIED: written without access to a Windows toolchain (MSVC/MinGW)
+ * to compile it against - see ../README.md.
+ *
+ * Unlike the macOS port (which reuses Darwin's own native BSD
+ * <netinet/*.h> structs), this file defines its own byte-exact,
+ * #pragma pack(push,1) wire-format structs for the IPv4/IPv6/TCP/UDP
+ * headers rather than relying on any OS-provided ones: Windows doesn't
+ * ship a standard "struct iphdr"/"struct ip" the way POSIX systems do,
+ * and inventing this project's own portable structs sidesteps that
+ * entirely rather than fighting with WinSock's more limited/differently
+ * shaped header definitions. Only struct in_addr/in6_addr (used for the
+ * checksum.h calls, which every platform's port shares unmodified) come
+ * from an OS header (<winsock2.h>/<ws2tcpip.h> here) - those are
+ * standard, portable 4-byte/16-byte address containers, not something
+ * that needs reinventing.
+ *
+ * Every function below that doesn't touch these header structs directly
  * (resolve_egress_contact, otp_fw_classify_egress/_ingress,
  * otp_fw_encrypt_packet, otp_fw_decrypt_packet, the payload-stream
- * helpers) never touches these struct fields directly, only through the
- * two fix_ipv{4,6}_lengths_and_checksums() helpers below.
+ * helpers) is otherwise identical in logic to the Linux/macOS versions -
+ * only parse_packet() and the two fix_ipv{4,6}_lengths_and_checksums()
+ * helpers differ, because those are the only places touching header
+ * bytes directly.
  *
- * This file declares the exact same public API as packet_codec.h
- * (reused unmodified from firewall/daemon/ - it declares no
- * platform-specific types), so it's a drop-in replacement: compile this
- * file instead of firewall/daemon/packet_codec.c.
+ * Declares the exact same public API as packet_codec.h (reused
+ * unmodified from firewall/linux-kernel-module/ - it declares no platform-specific
+ * types), so this is a drop-in replacement: the Windows service project
+ * compiles this file instead of firewall/linux-kernel-module/packet_codec.c.
  */
 
 #include "packet_codec.h"
@@ -29,15 +37,73 @@
 #include "cipher.h"
 #include "keychain.h"
 
+#ifdef _WIN32
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#else
+/* Allows this file to at least be syntax-reasoned-about/partially
+ * exercised on a POSIX box during development, even though it's only
+ * ever meant to be built for Windows in practice. */
 #include <arpa/inet.h>
 #include <netinet/in.h>
-#include <netinet/ip.h>
-#include <netinet/ip6.h>
-#include <netinet/tcp.h>
-#include <netinet/udp.h>
+#endif
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#pragma pack(push, 1)
+typedef struct
+{
+  uint8_t ver_ihl; /* version:4 (high nibble), IHL in 32-bit words:4 (low nibble) */
+  uint8_t tos;
+  uint16_t tot_len;
+  uint16_t id;
+  uint16_t frag_off;
+  uint8_t ttl;
+  uint8_t protocol;
+  uint16_t checksum;
+  uint32_t src;
+  uint32_t dst;
+} WinIPv4Header;
+
+typedef struct
+{
+  uint8_t ver_tc_hi;     /* version:4, top 4 bits of traffic class */
+  uint8_t tc_lo_flow_hi; /* bottom 4 bits of traffic class, top 4 bits of flow label */
+  uint16_t flow_lo;      /* remaining 16 bits of flow label */
+  uint16_t payload_len;
+  uint8_t next_header;
+  uint8_t hop_limit;
+  uint8_t src[16];
+  uint8_t dst[16];
+} WinIPv6Header;
+
+typedef struct
+{
+  uint16_t src_port;
+  uint16_t dst_port;
+  uint32_t seq;
+  uint32_t ack;
+  uint8_t data_off_reserved; /* data offset in 32-bit words:4 (high nibble), reserved:4 */
+  uint8_t flags;
+  uint16_t window;
+  uint16_t checksum;
+  uint16_t urgent_ptr;
+} WinTCPHeader;
+
+typedef struct
+{
+  uint16_t src_port;
+  uint16_t dst_port;
+  uint16_t length;
+  uint16_t checksum;
+} WinUDPHeader;
+#pragma pack(pop)
+
+#define WIN_IPPROTO_TCP 6
+#define WIN_IPPROTO_UDP 17
+#define WIN_IPPROTO_ICMPV6 58
 
 typedef struct
 {
@@ -48,8 +114,8 @@ typedef struct
   size_t l4_hlen;
   const unsigned char *payload;
   size_t payload_len;
-  struct in_addr v4_src, v4_dst;
-  struct in6_addr v6_src, v6_dst;
+  uint8_t v4_src[4], v4_dst[4];
+  uint8_t v6_src[16], v6_dst[16];
 } ParsedPacket;
 
 /* Bounds-checks everything: `pkt` is untrusted network input by design
@@ -65,42 +131,43 @@ static int parse_packet(const unsigned char *pkt, int pkt_len, ParsedPacket *pp)
 
   if (version == 4)
   {
-    if (pkt_len < (int)sizeof(struct ip))
+    if (pkt_len < (int)sizeof(WinIPv4Header))
       return -1;
-    const struct ip *iph = (const struct ip *)pkt;
-    size_t ip_hlen = (size_t)iph->ip_hl * 4;
-    if (iph->ip_hl < 5 || (int)ip_hlen > pkt_len)
+    const WinIPv4Header *iph = (const WinIPv4Header *)pkt;
+    size_t ihl = iph->ver_ihl & 0x0F;
+    size_t ip_hlen = ihl * 4;
+    if (ihl < 5 || (int)ip_hlen > pkt_len)
       return -1;
-    size_t tot_len = ntohs(iph->ip_len);
+    size_t tot_len = ntohs(iph->tot_len);
     if (tot_len < ip_hlen || (int)tot_len > pkt_len)
       return -1;
 
     pp->family = 4;
     pp->ip_hlen = ip_hlen;
-    pp->proto = iph->ip_p;
-    memcpy(&pp->v4_src, &iph->ip_src, 4);
-    memcpy(&pp->v4_dst, &iph->ip_dst, 4);
+    pp->proto = iph->protocol;
+    memcpy(pp->v4_src, &iph->src, 4);
+    memcpy(pp->v4_dst, &iph->dst, 4);
     pp->l4 = pkt + ip_hlen;
     l4_total_avail = tot_len - ip_hlen;
   }
   else if (version == 6)
   {
-    if (pkt_len < (int)sizeof(struct ip6_hdr))
+    if (pkt_len < (int)sizeof(WinIPv6Header))
       return -1;
-    const struct ip6_hdr *ip6 = (const struct ip6_hdr *)pkt;
-    size_t plen = ntohs(ip6->ip6_plen);
-    if (sizeof(struct ip6_hdr) + plen > (size_t)pkt_len)
+    const WinIPv6Header *ip6h = (const WinIPv6Header *)pkt;
+    size_t plen = ntohs(ip6h->payload_len);
+    if (sizeof(WinIPv6Header) + plen > (size_t)pkt_len)
       return -1;
 
     pp->family = 6;
-    pp->ip_hlen = sizeof(struct ip6_hdr);
-    /* Extension headers are not walked (documented v1 scope limit in
-     * ../../README.md's "Limitations"): ip6_nxt is trusted to already
+    pp->ip_hlen = sizeof(WinIPv6Header);
+    /* Extension headers are not walked (documented v1 scope limit, same
+     * as the other two platforms): next_header is trusted to already
      * name the L4 protocol directly. */
-    pp->proto = ip6->ip6_nxt;
-    pp->v6_src = ip6->ip6_src;
-    pp->v6_dst = ip6->ip6_dst;
-    pp->l4 = pkt + sizeof(struct ip6_hdr);
+    pp->proto = ip6h->next_header;
+    memcpy(pp->v6_src, ip6h->src, 16);
+    memcpy(pp->v6_dst, ip6h->dst, 16);
+    pp->l4 = pkt + sizeof(WinIPv6Header);
     l4_total_avail = plen;
   }
   else
@@ -108,27 +175,27 @@ static int parse_packet(const unsigned char *pkt, int pkt_len, ParsedPacket *pp)
     return -1;
   }
 
-  if (pp->proto == IPPROTO_TCP)
+  if (pp->proto == WIN_IPPROTO_TCP)
   {
-    if (l4_total_avail < sizeof(struct tcphdr))
+    if (l4_total_avail < sizeof(WinTCPHeader))
       return -1;
-    const struct tcphdr *th = (const struct tcphdr *)pp->l4;
-    size_t l4_hlen = (size_t)th->th_off * 4;
-    if (l4_hlen < sizeof(struct tcphdr) || l4_hlen > l4_total_avail)
+    const WinTCPHeader *th = (const WinTCPHeader *)pp->l4;
+    size_t l4_hlen = ((size_t)(th->data_off_reserved >> 4)) * 4;
+    if (l4_hlen < sizeof(WinTCPHeader) || l4_hlen > l4_total_avail)
       return -1;
     pp->l4_hlen = l4_hlen;
     pp->payload = pp->l4 + l4_hlen;
     pp->payload_len = l4_total_avail - l4_hlen;
   }
-  else if (pp->proto == IPPROTO_UDP)
+  else if (pp->proto == WIN_IPPROTO_UDP)
   {
-    if (l4_total_avail < sizeof(struct udphdr))
+    if (l4_total_avail < sizeof(WinUDPHeader))
       return -1;
-    const struct udphdr *uh = (const struct udphdr *)pp->l4;
-    size_t udp_len = ntohs(uh->uh_ulen);
-    if (udp_len < sizeof(struct udphdr) || udp_len > l4_total_avail)
+    const WinUDPHeader *uh = (const WinUDPHeader *)pp->l4;
+    size_t udp_len = ntohs(uh->length);
+    if (udp_len < sizeof(WinUDPHeader) || udp_len > l4_total_avail)
       return -1;
-    pp->l4_hlen = sizeof(struct udphdr);
+    pp->l4_hlen = sizeof(WinUDPHeader);
     pp->payload = pp->l4 + pp->l4_hlen;
     pp->payload_len = udp_len - pp->l4_hlen;
   }
@@ -157,27 +224,27 @@ int otp_fw_describe_packet(const unsigned char *pkt, int pkt_len,
 
   if (pp.family == 4)
   {
-    inet_ntop(AF_INET, &pp.v4_src, src_ip, src_ip_size);
-    inet_ntop(AF_INET, &pp.v4_dst, dst_ip, dst_ip_size);
+    inet_ntop(AF_INET, pp.v4_src, src_ip, (socklen_t)src_ip_size);
+    inet_ntop(AF_INET, pp.v4_dst, dst_ip, (socklen_t)dst_ip_size);
   }
   else
   {
-    inet_ntop(AF_INET6, &pp.v6_src, src_ip, src_ip_size);
-    inet_ntop(AF_INET6, &pp.v6_dst, dst_ip, dst_ip_size);
+    inet_ntop(AF_INET6, pp.v6_src, src_ip, (socklen_t)src_ip_size);
+    inet_ntop(AF_INET6, pp.v6_dst, dst_ip, (socklen_t)dst_ip_size);
   }
 
-  if (pp.proto == IPPROTO_TCP)
+  if (pp.proto == WIN_IPPROTO_TCP)
   {
-    const struct tcphdr *th = (const struct tcphdr *)pp.l4;
-    *src_port = ntohs(th->th_sport);
-    *dst_port = ntohs(th->th_dport);
+    const WinTCPHeader *th = (const WinTCPHeader *)pp.l4;
+    *src_port = ntohs(th->src_port);
+    *dst_port = ntohs(th->dst_port);
     *proto_name = "tcp";
   }
   else
   {
-    const struct udphdr *uh = (const struct udphdr *)pp.l4;
-    *src_port = ntohs(uh->uh_sport);
-    *dst_port = ntohs(uh->uh_dport);
+    const WinUDPHeader *uh = (const WinUDPHeader *)pp.l4;
+    *src_port = ntohs(uh->src_port);
+    *dst_port = ntohs(uh->dst_port);
     *proto_name = "udp";
   }
   return 0;
@@ -191,12 +258,25 @@ int otp_fw_header_length(const unsigned char *pkt, int pkt_len)
   return (int)(pp.ip_hlen + pp.l4_hlen);
 }
 
+/* No ICMPv6 check lives in this file: the kernel driver exempts ICMPv6
+ * entirely at its own fast-path candidate check (see
+ * ../Driver/otp_firewall_driver.c's otp_fw_driver_is_icmpv6()) before an
+ * ICMPv6 packet is ever queued to this userspace service at all - the
+ * same reason firewall/linux-kernel-module/otp_firewall.c's exemption
+ * lives only in the kernel module, with no matching logic in
+ * firewall/linux-kernel-module/packet_codec.c either. */
+
 /* fmemopen() rejects a zero-length buffer. Kept for the ingress/decrypt
  * side, which can legitimately be handed a zero-length ciphertext by an
- * unauthenticated sender (a bare zero-length UDP datagram, say) - that
- * has to fail meta-header validation cleanly rather than crash. The
- * egress/encrypt side no longer relies on this for the zero-payload
- * case (see PAYLOAD_PAD_LEN below): it never calls this with len==0. */
+ * unauthenticated sender - that has to fail meta-header validation
+ * cleanly rather than crash. The egress/encrypt side no longer relies on
+ * this for the zero-payload case (see PAYLOAD_PAD_LEN below).
+ *
+ * fmemopen()/open_memstream() are POSIX.1-2008, not part of the Windows
+ * CRT - MinGW-w64 (this project's existing Windows toolchain, see
+ * src/compat.h and `make mingw`) does provide them, so building this
+ * Windows service with MinGW rather than raw MSVC is assumed throughout
+ * this file. */
 static FILE *open_payload_stream(const unsigned char *payload, size_t len)
 {
   static unsigned char dummy = 0;
@@ -211,15 +291,12 @@ static FILE *open_payload_stream(const unsigned char *payload, size_t len)
 }
 
 /* cipher.c's encrypt_with_contact() refuses a genuinely empty message
- * ("Error: No input data provided") - so a bare TCP ACK or empty UDP
- * datagram (a zero-length L4 payload, entirely normal on the wire)
- * would otherwise fail to encrypt and get dropped, which would break
- * TCP outright. One fixed sentinel byte is appended to every outgoing
- * payload before encryption - regardless of whether it is already
- * non-empty - so the byte stream handed to encrypt_with_contact() is
- * never actually empty; the matching byte is dropped again on
- * successful decrypt (see otp_fw_decrypt_packet()). The sentinel's
- * value is never inspected - only its presence matters. */
+ * ("Error: No input data provided") - a bare TCP ACK or empty UDP
+ * datagram would otherwise fail to encrypt and get dropped, breaking TCP
+ * outright. One fixed sentinel byte is appended to every outgoing
+ * payload before encryption so the byte stream handed to
+ * encrypt_with_contact() is never actually empty; dropped again on
+ * successful decrypt. */
 #define PAYLOAD_PAD_LEN 1
 
 static FILE *open_padded_payload_stream(const unsigned char *payload, size_t len, unsigned char *scratch)
@@ -232,62 +309,62 @@ static FILE *open_padded_payload_stream(const unsigned char *payload, size_t len
 static void fix_ipv4_lengths_and_checksums(unsigned char *out, size_t ip_hlen, size_t l4_hlen,
                                            size_t new_payload_len, uint8_t proto)
 {
-  struct ip *iph = (struct ip *)out;
+  WinIPv4Header *iph = (WinIPv4Header *)out;
   size_t total = ip_hlen + l4_hlen + new_payload_len;
-  iph->ip_len = htons((uint16_t)total);
-  iph->ip_sum = 0;
-  iph->ip_sum = otp_fw_ipv4_header_checksum(out, ip_hlen);
+  iph->tot_len = htons((uint16_t)total);
+  iph->checksum = 0;
+  iph->checksum = otp_fw_ipv4_header_checksum(out, ip_hlen);
 
   unsigned char *l4 = out + ip_hlen;
   size_t l4_len = l4_hlen + new_payload_len;
 
-  if (proto == IPPROTO_UDP)
+  struct in_addr src, dst;
+  memcpy(&src, &iph->src, 4);
+  memcpy(&dst, &iph->dst, 4);
+
+  if (proto == WIN_IPPROTO_UDP)
   {
-    struct udphdr *uh = (struct udphdr *)l4;
-    uh->uh_ulen = htons((uint16_t)l4_len);
-    uh->uh_sum = 0;
-    struct in_addr src, dst;
-    memcpy(&src, &iph->ip_src, 4);
-    memcpy(&dst, &iph->ip_dst, 4);
-    uh->uh_sum = otp_fw_l4_checksum_v4(src, dst, proto, l4, l4_len);
-    if (uh->uh_sum == 0)
-      uh->uh_sum = 0xFFFF;
+    WinUDPHeader *uh = (WinUDPHeader *)l4;
+    uh->length = htons((uint16_t)l4_len);
+    uh->checksum = 0;
+    uh->checksum = otp_fw_l4_checksum_v4(src, dst, proto, l4, l4_len);
+    if (uh->checksum == 0)
+      uh->checksum = 0xFFFF;
   }
   else
   {
-    struct tcphdr *th = (struct tcphdr *)l4;
-    th->th_sum = 0;
-    struct in_addr src, dst;
-    memcpy(&src, &iph->ip_src, 4);
-    memcpy(&dst, &iph->ip_dst, 4);
-    th->th_sum = otp_fw_l4_checksum_v4(src, dst, proto, l4, l4_len);
+    WinTCPHeader *th = (WinTCPHeader *)l4;
+    th->checksum = 0;
+    th->checksum = otp_fw_l4_checksum_v4(src, dst, proto, l4, l4_len);
   }
 }
 
 static void fix_ipv6_lengths_and_checksums(unsigned char *out, size_t l4_hlen,
                                            size_t new_payload_len, uint8_t proto)
 {
-  struct ip6_hdr *ip6 = (struct ip6_hdr *)out;
+  WinIPv6Header *ip6h = (WinIPv6Header *)out;
   size_t l4_len = l4_hlen + new_payload_len;
-  ip6->ip6_plen = htons((uint16_t)l4_len);
+  ip6h->payload_len = htons((uint16_t)l4_len);
 
-  unsigned char *l4 = out + sizeof(struct ip6_hdr);
-  struct in6_addr src = ip6->ip6_src, dst = ip6->ip6_dst;
+  unsigned char *l4 = out + sizeof(WinIPv6Header);
+  struct in6_addr src, dst;
+  memcpy(&src, ip6h->src, 16);
+  memcpy(&dst, ip6h->dst, 16);
 
-  if (proto == IPPROTO_UDP)
+  if (proto == WIN_IPPROTO_UDP)
   {
-    struct udphdr *uh = (struct udphdr *)l4;
-    uh->uh_ulen = htons((uint16_t)l4_len);
-    uh->uh_sum = 0;
-    uh->uh_sum = otp_fw_l4_checksum_v6(src, dst, proto, l4, l4_len);
-    if (uh->uh_sum == 0)
-      uh->uh_sum = 0xFFFF;
+    WinUDPHeader *uh = (WinUDPHeader *)l4;
+    uh->length = htons((uint16_t)l4_len);
+    uh->checksum = 0;
+    uh->checksum = otp_fw_l4_checksum_v6(src, dst, proto, l4, l4_len);
+    if (uh->checksum == 0)
+      uh->checksum = 0xFFFF;
   }
   else
   {
-    struct tcphdr *th = (struct tcphdr *)l4;
-    th->th_sum = 0;
-    th->th_sum = otp_fw_l4_checksum_v6(src, dst, proto, l4, l4_len);
+    WinTCPHeader *th = (WinTCPHeader *)l4;
+    th->checksum = 0;
+    th->checksum = otp_fw_l4_checksum_v6(src, dst, proto, l4, l4_len);
   }
 }
 
@@ -304,9 +381,9 @@ static otp_fw_result_t resolve_egress_contact(const char *keychain_dir, const Fw
 
   char dst_ip[OTP_FW_IPSTR_LEN];
   if (pp->family == 4)
-    inet_ntop(AF_INET, &pp->v4_dst, dst_ip, sizeof(dst_ip));
+    inet_ntop(AF_INET, pp->v4_dst, dst_ip, (socklen_t)sizeof(dst_ip));
   else
-    inet_ntop(AF_INET6, &pp->v6_dst, dst_ip, sizeof(dst_ip));
+    inet_ntop(AF_INET6, pp->v6_dst, dst_ip, (socklen_t)sizeof(dst_ip));
 
   const char *contact_name = fwconfig_contact_for_ip(cfg, dst_ip);
   if (!contact_name)
@@ -316,10 +393,6 @@ static otp_fw_result_t resolve_egress_contact(const char *keychain_dir, const Fw
   if (!c)
     return OTP_FW_NO_CONTACT;
 
-  /* Set as soon as the contact is positively identified, not only on the
-   * final OTP_FW_OK path below: KEY_EXHAUSTED and PENDING_RECOVERY are
-   * failures for a *known* contact, and the caller's restricted.log
-   * entry should name it. */
   *contact_out = c;
 
   if (c->EncryptionKeySize == 0)
@@ -330,11 +403,6 @@ static otp_fw_result_t resolve_egress_contact(const char *keychain_dir, const Fw
   return OTP_FW_OK;
 }
 
-/* Classifies an outbound packet exactly as otp_fw_encrypt_packet() would,
- * without ever calling encrypt_with_contact() - so nothing is spent.
- * Used for log-only observation, where a real attempt would otherwise
- * irreversibly consume key material for traffic that's only being
- * observed, not actually sent. */
 otp_fw_result_t otp_fw_classify_egress(const char *keychain_dir, const FwConfig *cfg,
                                        const unsigned char *pkt, int pkt_len,
                                        char *contact_out, size_t contact_out_size)
@@ -342,7 +410,7 @@ otp_fw_result_t otp_fw_classify_egress(const char *keychain_dir, const FwConfig 
   ParsedPacket pp;
   Contact *c = NULL;
   otp_fw_result_t r = resolve_egress_contact(keychain_dir, cfg, pkt, pkt_len, &pp, &c);
-  if (c) /* identified, even if r is a failure like KEY_EXHAUSTED/PENDING_RECOVERY */
+  if (c)
     snprintf(contact_out, contact_out_size, "%s", c->Name);
   return r;
 }
@@ -355,16 +423,12 @@ otp_fw_result_t otp_fw_encrypt_packet(const char *keychain_dir, const FwConfig *
   ParsedPacket pp;
   Contact *c = NULL;
   otp_fw_result_t resolved = resolve_egress_contact(keychain_dir, cfg, pkt, pkt_len, &pp, &c);
-  if (c) /* identified, even if resolved is a failure like KEY_EXHAUSTED/PENDING_RECOVERY */
+  if (c)
     snprintf(contact_out, contact_out_size, "%s", c->Name);
   if (resolved != OTP_FW_OK)
     return resolved;
   const char *contact = c->Name;
 
-  /* Conservative pre-check using the documented worst-case growth bound,
-   * BEFORE any key material is spent: encrypt_with_contact() commits real
-   * key material on success, and the true grown size isn't known until
-   * after it runs. */
   size_t header_len = pp.ip_hlen + pp.l4_hlen;
   size_t worst_case_total = header_len + pp.payload_len + PAYLOAD_PAD_LEN + OTP_FW_MAX_GROWTH;
   size_t worst_case_l4 = pp.l4_hlen + pp.payload_len + PAYLOAD_PAD_LEN + OTP_FW_MAX_GROWTH;
@@ -389,7 +453,7 @@ otp_fw_result_t otp_fw_encrypt_packet(const char *keychain_dir, const FwConfig *
 
   int rc = encrypt_with_contact(contact, in, outf);
   fclose(in);
-  fclose(outf); /* finalizes cipherbuf/cipherlen */
+  fclose(outf);
 
   if (rc != KEYCHAIN_OK)
   {
@@ -398,7 +462,6 @@ otp_fw_result_t otp_fw_encrypt_packet(const char *keychain_dir, const FwConfig *
   }
 
   size_t new_total = header_len + cipherlen;
-  /* Defensive backstop only - see the pre-check above. */
   size_t l4_len = pp.l4_hlen + cipherlen;
   size_t length_field_limit = pp.family == 4 ? new_total : l4_len;
   if (new_total > (size_t)out_cap || length_field_limit > 65535)
@@ -417,7 +480,6 @@ otp_fw_result_t otp_fw_encrypt_packet(const char *keychain_dir, const FwConfig *
     fix_ipv6_lengths_and_checksums(out, pp.l4_hlen, cipherlen, pp.proto);
 
   *out_len = (int)new_total;
-  snprintf(contact_out, contact_out_size, "%s", contact);
   return OTP_FW_OK;
 }
 
@@ -472,7 +534,9 @@ otp_fw_result_t otp_fw_decrypt_packet(const char *keychain_dir, const CandidateL
       size_t real_len = plainlen - PAYLOAD_PAD_LEN;
       size_t header_len = pp.ip_hlen + pp.l4_hlen;
       size_t new_total = header_len + real_len;
-      if (new_total > (size_t)out_cap)
+      size_t decrypted_l4_len = pp.l4_hlen + real_len;
+      size_t length_field_limit = pp.family == 4 ? new_total : decrypted_l4_len;
+      if (new_total > (size_t)out_cap || length_field_limit > 65535)
       {
         free(plainbuf);
         return OTP_FW_INTERNAL_ERROR;

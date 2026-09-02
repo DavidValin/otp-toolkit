@@ -45,7 +45,7 @@ otp_fw_result_t otp_fw_decrypt_packet(const char *keychain_dir, const CandidateL
  * consumes one-time-pad key bytes, which log-only mode must not do to
  * traffic it's only supposed to be observing. See
  * ../linux-kernel-module/README.md's "Activate" section for how a
- * caller (e.g. otp-firewalld's --mode=log-only) is meant to use this.
+ * caller (e.g. otp_firewalld's --mode=log-only) is meant to use this.
  *
  * otp_fw_classify_egress() can determine a full OTP_FW_OK/otherwise
  * verdict for free (contact selection is deterministic from

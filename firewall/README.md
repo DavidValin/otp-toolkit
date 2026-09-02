@@ -245,24 +245,38 @@ connection — only the two firewalls involved ever see the grown form.
 The behavior above is identical everywhere; what differs per platform is
 the mechanism that intercepts traffic and hands it to the encryption logic,
 and therefore how you build, configure, and turn the firewall on and off.
-Each platform has its own README with complete, self-contained
+Each platform's implementation is entirely self-contained in its own
+folder — the kernel-level component (or system-extension equivalent), the
+userspace daemon, and its control CLI all live together there, with no
+code shared from outside that folder. Naming is consistent across every
+platform that has each piece: the daemon is always `otp_firewalld`, and
+the command-line kill-switch/status utility, where a platform has a
+privileged control surface to script at all, is always `otpfwctl`. Each
+platform has its own README with complete, self-contained
 compile/configure/activate/deactivate instructions:
 
 - **[Linux Kernel Module](linux-kernel-module/README.md)** — a real
-  netfilter kernel module plus a userspace daemon, talking over NFQUEUE.
-  Built, compiled, and unit-tested.
+  netfilter kernel module (`otp_firewall.ko`) plus a userspace daemon
+  (`otp_firewalld`) and control CLI (`otpfwctl`), talking over NFQUEUE.
+  The daemon and CLI are built, compiled, and unit-tested; the kernel
+  module itself has never been `insmod`'d on a real machine.
 - **[macOS System Extension](macos-kernel-module/README.md)** — a
   `NEPacketTunnelProvider` System Extension (there is no supported
-  kernel-module mechanism left on macOS). Never compiled — written without
-  access to a Mac.
+  kernel-module mechanism left on macOS, and no scriptable control
+  surface outside the sample app — so there's no separate `otp_firewalld`
+  binary or `otpfwctl` here, just the extension itself). Never compiled —
+  written without access to a Mac.
 - **[Windows WFP Callout Driver](windows-wfp-callout-driver/README.md)** —
   a custom Windows Filtering Platform callout driver plus a background
-  Windows Service. Never compiled — written without access to the Windows
-  Driver Kit.
+  Windows Service (`otp_firewalld.exe`) and control CLI (`otpfwctl.exe`).
+  Never compiled — written without access to the Windows Driver Kit.
 - **[FreeBSD Kernel Module](freebsd-kernel-module/README.md)** — a real
-  `pfil(9)`-based kernel module plus a userspace daemon, talking over a
-  custom character device. Never compiled — written without access to a
-  FreeBSD machine.
+  `pfil(9)`-based kernel module plus a userspace daemon (`otp_firewalld`)
+  and control CLI (`otpfwctl`), talking over a custom character device.
+  The kernel module has never been compiled or loaded on a real FreeBSD
+  machine; the daemon and CLI compile, link, and run successfully against
+  the real `otp` library on Linux (see its README), which is as close to
+  verified as anything not run on real FreeBSD can get.
 
 Maturity differs sharply between them — see each platform's own README for
 exactly what is and isn't verified before relying on it for anything.

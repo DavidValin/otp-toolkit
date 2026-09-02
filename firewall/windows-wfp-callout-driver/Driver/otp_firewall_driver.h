@@ -98,7 +98,7 @@ BOOLEAN OtpFwIsCandidate(BOOLEAN is_v6, const UINT8 *addr);
 NTSTATUS OtpFwSetCandidates(const OTP_FW_CANDIDATE *list, ULONG count);
 
 /* Fast in-kernel ICMPv6 exemption check, mirroring the Linux module's
- * own kernel-side exemption (see packet_codec_windows.c's forward
+ * own kernel-side exemption (see packet_codec.c's forward
  * comment) - Neighbor Discovery must never be queued to userspace,
  * both for correctness (userspace decrypt would corrupt NDP and break
  * IPv6 link-local operation before the daemon is even reachable) and

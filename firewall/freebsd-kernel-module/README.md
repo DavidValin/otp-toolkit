@@ -2,7 +2,7 @@
 
 A genuine kernel module (`otp_firewall.ko`, built via FreeBSD's own KLD
 framework — no deprecation story here the way macOS's KEXTs have) plus a
-userspace background daemon (`otp_firewalld_freebsd`), talking to each
+userspace background daemon (`otp_firewalld`) and control CLI (`otpfwctl`), talking to each
 other over a custom character device (`/dev/otp_firewall`). For what the
 firewall actually does — what gets encrypted, how a packet is
 authenticated, what gets logged — see [`../README.md`](../README.md).
@@ -11,9 +11,13 @@ and off.
 
 ## Status: what's verified and what isn't
 
-**Nothing in this directory has been compiled or loaded.** This was
-written without access to a FreeBSD machine or its kernel headers/source
-tree. In descending order of how much the remaining uncertainty matters:
+**None of the kernel-mode code in this directory has been compiled or
+loaded** — this was written without access to a FreeBSD machine or its
+kernel headers/source tree. The userspace daemon and control CLI are the
+exception (see item 7 below): they compile, link, and run successfully on
+Linux against the real `otp` library, which is the most verification
+possible without a real FreeBSD machine. In descending order of how much
+the remaining uncertainty matters:
 
 1. **The exact `pfil(9)` registration KPI.** This file targets the
    FreeBSD 14 KPI (`pfil_head_get()` + `struct pfil_hook_args`/
@@ -48,7 +52,7 @@ tree. In descending order of how much the remaining uncertainty matters:
    table, and the sysctl kill switch** — ordinary, well-documented
    FreeBSD device-driver patterns (the same shape `/dev/bpf` and similar
    drivers use). Highest-confidence part of the module.
-6. **`Shared/packet_codec_freebsd.c`** — the highest-confidence file
+6. **`Shared/packet_codec.c`** — the highest-confidence file
    dealing with wire-format bytes in this port: glibc (on the Linux
    machine this was written on) optionally provides the same BSD-compat
    `struct ip`/`struct tcphdr`/`struct udphdr` definitions FreeBSD uses
@@ -64,8 +68,8 @@ tree. In descending order of how much the remaining uncertainty matters:
    and FreeBSD's native ones could still diverge in some field this
    test suite doesn't exercise), but it's meaningfully more verified
    than everything else in this port.
-7. **The entire userspace side** (`otp_firewalld_freebsd.c`,
-   `kernel_ctl_freebsd.c`, plus `ack.h`/`.c` — the delivery-acknowledgment
+7. **The entire userspace side** (`otp_firewalld.c`,
+   `kernel_ctl.c`, plus `ack.h`/`.c` — the delivery-acknowledgment
    mechanism, see [`../README.md`'s "Delivery
    acknowledgment"](../README.md#delivery-acknowledgment)) is the most
    verified part of this entire port, not just reasoned about: with
@@ -107,7 +111,7 @@ deliverable.
                          └───────────┼────────────────────────────┘
                                      │ /dev/otp_firewall (custom read/write/ioctl queue)
                          ┌───────────▼────────────────────────────┐
-                         │   otp_firewalld_freebsd  (daemon,       │
+                         │   otp_firewalld  (daemon,               │
                          │   userspace)                            │
                          │                                        │
                          │  outgoing: encrypt for the matched      │
@@ -132,17 +136,25 @@ acknowledgment"](../README.md#delivery-acknowledgment)), a small UDP
 side channel on a fixed port the module lets through untouched in both
 directions.
 
-## What's reused unmodified vs. what's new
+## What's identical to Linux vs. what's new
 
-`cipher.c`/`keychain.c`/`commit.c` need **zero changes** — `src/compat.h`
-already branches purely on `_WIN32` vs. real POSIX, and FreeBSD is
-genuine POSIX.
+Every platform's firewall code lives entirely in its own directory now —
+there is no shared `firewall/daemon/` directory anywhere in this
+repository. Instead, the platform-agnostic daemon-support files started
+as Linux's implementation and are duplicated, filename-for-filename, into
+every platform's own folder; keeping them byte-identical across platforms
+(verified by diffing against Linux's copies) is a convention this project
+follows, not something the build system enforces.
 
-Of `firewall/daemon/`'s own files, everything is pure POSIX C with no
-Linux-specific dependencies **except** `packet_codec.c` (Linux/glibc
-struct field names) and `kernel_ctl.c` (writes to a Linux `/proc` file)
-and `main.c` (NFQUEUE-specific). These files are reused **directly, by
-reference, unmodified**:
+`cipher.c`/`keychain.c`/`commit.c` (from `src/`, one directory further up)
+need **zero changes** — `src/compat.h` already branches purely on `_WIN32`
+vs. real POSIX, and FreeBSD is genuine POSIX.
+
+Of the daemon-support files in this directory, everything is pure POSIX C
+with no Linux-specific dependencies **except** `packet_codec.c` (Linux/glibc
+struct field names) and `kernel_ctl.c` (writes to a Linux `/proc` file) and
+`otp_firewalld.c` (NFQUEUE-specific) — Linux's own versions of those three.
+These files are byte-identical to Linux's copies, unmodified:
 
 - `common.h`, `checksum.h`/`.c`, `config.h`/`.c`, `pin.h`/`.c`,
   `trial.h`/`.c`, `keychain_setup.h`/`.c`, `log.h`/`.c`, `ack.h`/`.c`
@@ -152,14 +164,15 @@ reference, unmodified**:
   APIs have no platform-specific types)
 
 ...and this directory provides FreeBSD-specific bodies for the three that
-need one:
+need one, named identically to their Linux counterparts (no `_freebsd`
+suffix — the containing directory is what identifies the platform now):
 
-- `Shared/packet_codec_freebsd.c` — same public API as `packet_codec.h`,
+- `Shared/packet_codec.c` — same public API as `packet_codec.h`,
   BSD header field names (see the Status section above).
-- `kernel_ctl_freebsd.c` — same public API as `kernel_ctl.h`, pushes
+- `kernel_ctl.c` — same public API as `kernel_ctl.h`, pushes
   candidates via `ioctl(OTP_FW_IOC_SET_CANDIDATES)` instead of a
   `/proc` write.
-- `otp_firewalld_freebsd.c` — plays `main.c`'s role, reading/writing
+- `otp_firewalld.c` — plays Linux's `otp_firewalld.c`'s role, reading/writing
   `/dev/otp_firewall` instead of an NFQUEUE socket.
 
 New for FreeBSD, in this directory:
@@ -171,7 +184,8 @@ New for FreeBSD, in this directory:
 - `otp_firewall.c` — the KLD itself: `pfil(9)` hooks, the character
   device, the candidate table, the kill switch, and the packet
   queue/verdict/reinject machinery.
-- `otpfwctl_freebsd.c` — the kill-switch control utility.
+- `otpfwctl.c` — the kill-switch control utility, named the same as every
+  other platform's control CLI.
 
 ## Compile
 
@@ -197,22 +211,24 @@ Produces `otp_firewall.ko`. See the Status section above regarding the
 
 ### 3. Build the daemon and control tool
 
-From the repository root, compiling the reused `firewall/daemon/*` files
-alongside this directory's FreeBSD-specific ones and the core library:
+Everything the daemon needs lives directly in this directory now — no
+other directory's sources are involved except the core library in `src/`.
+From the repository root:
 
 ```
-cc -O2 -Wall -Isrc -Ifirewall/daemon -Ifirewall/freebsd-kernel-module \
-   -o otp_firewalld_freebsd \
-   firewall/freebsd-kernel-module/otp_firewalld_freebsd.c \
-   firewall/freebsd-kernel-module/kernel_ctl_freebsd.c \
-   firewall/freebsd-kernel-module/Shared/packet_codec_freebsd.c \
-   firewall/daemon/config.c firewall/daemon/pin.c firewall/daemon/trial.c \
-   firewall/daemon/checksum.c firewall/daemon/log.c firewall/daemon/keychain_setup.c \
-   firewall/daemon/ack.c \
+cc -O2 -Wall -Isrc -Ifirewall/freebsd-kernel-module \
+   -o otp_firewalld \
+   firewall/freebsd-kernel-module/otp_firewalld.c \
+   firewall/freebsd-kernel-module/kernel_ctl.c \
+   firewall/freebsd-kernel-module/Shared/packet_codec.c \
+   firewall/freebsd-kernel-module/config.c firewall/freebsd-kernel-module/pin.c \
+   firewall/freebsd-kernel-module/trial.c firewall/freebsd-kernel-module/checksum.c \
+   firewall/freebsd-kernel-module/log.c firewall/freebsd-kernel-module/keychain_setup.c \
+   firewall/freebsd-kernel-module/ack.c \
    src/cipher.c src/keychain.c src/commit.c
 
 cc -O2 -Wall -Ifirewall/freebsd-kernel-module \
-   -o otpfwctl firewall/freebsd-kernel-module/otpfwctl_freebsd.c
+   -o otpfwctl firewall/freebsd-kernel-module/otpfwctl.c
 ```
 
 ## Configure
@@ -261,7 +277,7 @@ Start it in log-only mode first, so you can see what it *would* do
 before it can actually block anything:
 
 ```
-sudo ./otp_firewalld_freebsd --mode=log-only
+sudo ./otp_firewalld --mode=log-only
 ```
 
 Watch `~/.otp/authorized.log` and `~/.otp/restricted.log` (see
@@ -270,10 +286,10 @@ it's making the decisions you expect. When you're satisfied, restart it
 in enforcing mode:
 
 ```
-sudo ./otp_firewalld_freebsd --mode=enforce
+sudo ./otp_firewalld --mode=enforce
 ```
 
-Full flag list: `otp_firewalld_freebsd --help`. Notably: `--config=PATH`
+Full flag list: `otp_firewalld --help`. Notably: `--config=PATH`
 to use a config file other than `~/.otp/firewall.config`, and
 `--resolve-interval=SECONDS` to change how often `firewall.config`
 hostnames are re-resolved (60s by default).
@@ -317,5 +333,5 @@ sudo kldunload otp_firewall
 
 This unloads the kernel module (which also turns enforcement off, and
 drains any packets still queued at unload time — see `otp_fw_modevent()`'s
-`MOD_UNLOAD` handler). Then stop `otp_firewalld_freebsd` however you
+`MOD_UNLOAD` handler). Then stop `otp_firewalld` however you
 started it (`Ctrl-C`, an rc.d script, etc.).

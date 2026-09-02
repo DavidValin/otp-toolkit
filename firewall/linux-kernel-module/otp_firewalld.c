@@ -647,7 +647,7 @@ int main(int argc, char **argv)
   int nfq_socket_fd = nfq_fd(h);
   char buf[OTP_FW_PACKET_BUF_CAP] __attribute__((aligned(4)));
   time_t last_resolve = time(NULL);
-  fprintf(stderr, "otp-firewalld: running (mode=%s, queues=%u/%u, ack-timeout=%ds)\n",
+  fprintf(stderr, "otp_firewalld: running (mode=%s, queues=%u/%u, ack-timeout=%ds)\n",
          mode == OTP_FW_MODE_ENFORCE ? "enforce" : "log-only", queue_egress, queue_ingress, ack_timeout);
 
   while (!g_shutdown)

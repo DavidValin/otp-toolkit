@@ -1,43 +1,41 @@
 /*
- * otpfwctl_freebsd.c - kill switch control utility, talking to
- * /dev/otp_firewall directly via ioctl(); does not touch the daemon.
- * Equivalent to `sysctl net.otp_firewall.enabled=0/1` (see
- * otp_firewall.c's sysctl_otp_fw_enabled()) - both reach the exact same
- * kernel variable, this is just the scriptable/status-checking form.
+ * otpfwctl.c - kill switch control utility, talking to
+ * /proc/otp_firewall/enabled directly; does not touch the daemon.
+ * Equivalent to `echo 1/0 | sudo tee /proc/otp_firewall/enabled` (see
+ * otp_firewall.c's enabled_read()/enabled_write()) - both reach the
+ * exact same kernel state, this is just the scriptable/status-checking
+ * form, matching the otpfwctl each other platform ships.
  *
  * Usage: otpfwctl {enable|disable|status}
- *
- * UNVERIFIED - see README.md.
  */
 
-#include "otp_firewall_proto.h"
+#include "common.h"
 
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
 #include <string.h>
-#include <sys/ioctl.h>
 #include <unistd.h>
 
-static int open_device(void)
+static int open_enabled(int flags)
 {
-  int fd = open(OTP_FW_DEVICE_PATH, O_RDWR);
+  int fd = open(OTP_FW_PROC_ENABLED, flags);
   if (fd < 0)
     fprintf(stderr, "Error: cannot open %s (kernel module not loaded - see README.md): %s\n",
-           OTP_FW_DEVICE_PATH, strerror(errno));
+           OTP_FW_PROC_ENABLED, strerror(errno));
   return fd;
 }
 
 static int set_enabled(int enabled)
 {
-  int fd = open_device();
+  int fd = open_enabled(O_WRONLY);
   if (fd < 0)
     return 1;
 
-  uint32_t v = enabled ? 1 : 0;
-  if (ioctl(fd, OTP_FW_IOC_SET_ENABLED, &v) < 0)
+  const char *data = enabled ? "1" : "0";
+  if (write(fd, data, 1) != 1)
   {
-    fprintf(stderr, "Error: ioctl(SET_ENABLED) failed: %s\n", strerror(errno));
+    fprintf(stderr, "Error: write to %s failed: %s\n", OTP_FW_PROC_ENABLED, strerror(errno));
     close(fd);
     return 1;
   }
@@ -48,18 +46,19 @@ static int set_enabled(int enabled)
 
 static int get_status(void)
 {
-  int fd = open_device();
+  int fd = open_enabled(O_RDONLY);
   if (fd < 0)
     return 1;
 
-  uint32_t v = 0;
-  if (ioctl(fd, OTP_FW_IOC_GET_ENABLED, &v) < 0)
+  char buf[8] = {0};
+  ssize_t n = read(fd, buf, sizeof(buf) - 1);
+  close(fd);
+  if (n < 0)
   {
-    fprintf(stderr, "Error: ioctl(GET_ENABLED) failed: %s\n", strerror(errno));
-    close(fd);
+    fprintf(stderr, "Error: read from %s failed: %s\n", OTP_FW_PROC_ENABLED, strerror(errno));
     return 1;
   }
-  close(fd);
+  int v = (buf[0] == '1');
   printf("otp-toolkit firewall: %s\n", v ? "enabled (enforcing)" : "disabled (fail-open passthrough)");
   return 0;
 }

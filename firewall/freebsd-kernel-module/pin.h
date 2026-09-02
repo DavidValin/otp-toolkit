@@ -5,7 +5,7 @@
 #include "keychain.h" /* MAX_NAME_LENGTH */
 
 /* Not thread-safe: the daemon runs a single NFQUEUE processing loop
- * (see main.c), so no locking is needed here. */
+ * (see otp_firewalld.c), so no locking is needed here. */
 
 typedef struct
 {

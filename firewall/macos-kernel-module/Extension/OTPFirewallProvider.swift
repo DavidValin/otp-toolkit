@@ -110,11 +110,11 @@ class OTPFirewallProvider: NEPacketTunnelProvider {
   }
 
   /// Drives the delivery-acknowledgment mechanism (see
-  /// firewall/daemon/ack.h): drains the ack sockets and retries any
+  /// firewall/linux-kernel-module/ack.h): drains the ack sockets and retries any
   /// message past its ack timeout. A short, frequent tick - unlike the
   /// 60s config reload above - since the default ack retry timeout is a
   /// few seconds (see OTP_FW_ACK_DEFAULT_TIMEOUT_SECONDS), mirroring
-  /// firewall/daemon/main.c's OTP_FW_TICK_INTERVAL_SECONDS.
+  /// firewall/linux-kernel-module/otp_firewalld.c's OTP_FW_TICK_INTERVAL_SECONDS.
   private func startAckTimer() {
     let timer = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
     timer.schedule(deadline: .now() + 1, repeating: 1)

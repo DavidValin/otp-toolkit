@@ -152,7 +152,7 @@ static void test_touch_retry_resets_clock(void)
   ack_touch_retry(&t, "carol");
 }
 
-/* Recovered-at-startup case (see main.c's recover_outstanding_acks()):
+/* Recovered-at-startup case (see ack_recover_outstanding() below):
  * a message that was sent before the daemon last restarted, whose
  * ack-ref file (and thus real source_id) could not be found - passing
  * NULL for source_id must still correctly block egress, but must never

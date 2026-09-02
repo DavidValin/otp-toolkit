@@ -1,7 +1,7 @@
 /*
  * otp_firewall_proto.h - the wire format for talking to /dev/otp_firewall,
  * shared verbatim between the KLD (otp_firewall.c) and userspace
- * (otp_firewalld_freebsd.c, kernel_ctl_freebsd.c). Unlike Windows (where
+ * (otp_firewalld.c, kernel_ctl.c). Unlike Windows (where
  * kernel-mode and user-mode headers are genuinely incompatible, forcing
  * a dependency-free split header), FreeBSD's kernel and userspace C
  * environments both understand plain <sys/types.h> fixed-width integers
@@ -25,7 +25,7 @@
 #define OTP_FW_DEVICE_NAME "otp_firewall"
 #define OTP_FW_DEVICE_PATH "/dev/otp_firewall"
 
-/* Must match firewall/daemon/common.h's OTP_FW_ACK_PORT exactly - the
+/* Must match firewall/linux-kernel-module/common.h's OTP_FW_ACK_PORT exactly - the
  * daemon's delivery-acknowledgment side channel (see ack.h) needs this
  * traffic exempted from the encrypt/decrypt pipeline here in the
  * kernel, the same way ICMPv6 is, since neither this header nor the

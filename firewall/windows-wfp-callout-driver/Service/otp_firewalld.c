@@ -1,18 +1,18 @@
 /*
- * otp_firewall_svc.c - Windows equivalent of firewall/daemon/main.c:
- * a Windows Service that plays the same role otp-firewalld plays on
+ * otp_firewalld.c - Windows equivalent of firewall/linux-kernel-module/otp_firewalld.c:
+ * a Windows Service that plays the same role otp_firewalld plays on
  * Linux and the System Extension plays on macOS - startup
  * (keychain/config/log init), then a loop moving packets between the
  * kernel driver and the unmodified cipher.c/keychain.c library via
- * packet_codec_windows.c.
+ * packet_codec.c.
  *
  * UNVERIFIED - not built or run against a real Windows toolchain; see
  * ../README.md's confidence table.
  *
- * One genuine structural difference from Linux's main.c, not just a
+ * One genuine structural difference from Linux's otp_firewalld.c, not just a
  * syntax port, called out here rather than left implicit: Linux's
  * daemon is single-threaded by construction (SIGALRM interrupts a
- * blocking recv() via EINTR - see main.c's own comment on why
+ * blocking recv() via EINTR - see otp_firewalld.c's own comment on why
  * sigaction() without SA_RESTART matters). OTP_FW_IOCTL_DEQUEUE_PACKET
  * is a synchronous, blocking DeviceIoControl() call with no equivalent
  * "signal interrupts a blocked syscall" mechanism, so periodic config
@@ -50,7 +50,7 @@
 
 #define OTP_FW_SVC_NAME L"OTPFirewall"
 #define OTP_FW_DEFAULT_RESOLVE_INTERVAL_MS (60 * 1000)
-#define OTP_FW_ACK_TICK_MS 1000 /* mirrors main.c's OTP_FW_TICK_INTERVAL_SECONDS */
+#define OTP_FW_ACK_TICK_MS 1000 /* mirrors otp_firewalld.c's OTP_FW_TICK_INTERVAL_SECONDS */
 
 typedef struct
 {
@@ -77,7 +77,7 @@ static volatile LONG g_stop_requested = 0; /* guards ServiceCtrlHandler against 
 static BOOL g_wsa_started = FALSE;   /* only WSACleanup() if WSAStartup() actually succeeded */
 static BOOL g_crit_initialized = FALSE; /* only DeleteCriticalSection() if InitializeCriticalSection() actually ran */
 
-/* Mirrors main.c's reconcile_pins_with_config() exactly (same
+/* Mirrors otp_firewalld.c's reconcile_pins_with_config() exactly (same
  * unmodified pin.h/config.h API, only the surrounding daemon shape
  * differs) - a pin is dropped only when its contact was actually
  * removed from the keychain, or the config now EXPLICITLY maps that IP
@@ -107,7 +107,7 @@ static void reconcile_pins_with_config(void)
   }
 }
 
-/* Mirrors main.c's reconcile_acks_with_keychain(): a stale
+/* Mirrors otp_firewalld.c's reconcile_acks_with_keychain(): a stale
  * outstanding-ack slot (see ack.h) for a contact no longer in the
  * keychain is harmless but pointless to keep around. */
 static void reconcile_acks_with_keychain(void)
@@ -124,7 +124,7 @@ static void reconcile_acks_with_keychain(void)
   }
 }
 
-/* Mirrors main.c's reload_config_and_push(), including the keychain
+/* Mirrors otp_firewalld.c's reload_config_and_push(), including the keychain
  * snapshot/restore-on-failure fix documented there in detail - that
  * fix is load-bearing (a transient failure must not silently wipe
  * every known contact), so it is not something this port can afford to
@@ -165,7 +165,7 @@ static otp_fw_result_t process_inbound_locked(const unsigned char *pkt, int pkt_
                                               unsigned char *out_data, int out_cap, int *out_len,
                                               char *contact_out, size_t contact_out_size)
 {
-  /* Same static-buffer reasoning as main.c's ingress_cb(): CandidateList
+  /* Same static-buffer reasoning as otp_firewalld.c's ingress_cb(): CandidateList
    * is too large (~2.5MB) for a stack local, and reusing one is safe
    * because trial_select_primary() rebuilds it from scratch every call
    * and g_state_lock already serializes all callers. */
@@ -206,7 +206,7 @@ static otp_fw_result_t process_inbound_locked(const unsigned char *pkt, int pkt_
 }
 
 /* Runs one dequeued packet through the same egress/ingress logic
- * main.c's egress_cb()/ingress_cb() run, and fills in `verdict` for
+ * otp_firewalld.c's egress_cb()/ingress_cb() run, and fills in `verdict` for
  * OTP_FW_IOCTL_SUBMIT_VERDICT. Holds g_state_lock for the whole call:
  * every path through here touches g_keychain (via
  * otp_fw_encrypt_packet/otp_fw_decrypt_packet) and/or g_ctx (cfg,
@@ -234,7 +234,7 @@ static void process_packet(const otp_fw_dequeued_packet_t *in, otp_fw_verdict_su
   {
     /* Free (no key spent) contact resolution first, so the delivery-ack
      * gate (see ack.h) can reject a packet BEFORE ever calling the
-     * real, key-spending encrypt - see main.c's identical reasoning. */
+     * real, key-spending encrypt - see otp_firewalld.c's identical reasoning. */
     r = otp_fw_classify_egress(g_ctx.keychain_dir, &g_ctx.cfg, in->data, (int)in->data_len, contact, sizeof(contact));
     int out_len = 0;
     if (r == OTP_FW_OK)
@@ -250,7 +250,7 @@ static void process_packet(const otp_fw_dequeued_packet_t *in, otp_fw_verdict_su
     {
       otp_fw_log_authorized("egress", contact, src_ip, src_port, dst_ip, dst_port, proto);
 
-      /* Track this message for delivery acknowledgment - see main.c's
+      /* Track this message for delivery acknowledgment - see otp_firewalld.c's
        * identical reasoning. */
       int header_len = otp_fw_header_length(in->data, (int)in->data_len);
       Contact *c = find_contact(contact);
@@ -332,7 +332,7 @@ static void handle_redeliver_packet_locked(const unsigned char *pkt, int pkt_len
 }
 
 /* ack_scan_timeouts() callback (see ack.h) - identical reasoning to
- * main.c's retry_outstanding_message(): resend the exact kept
+ * otp_firewalld.c's retry_outstanding_message(): resend the exact kept
  * ciphertext via keychain_recover_last(), never a fresh encrypt. Called
  * with g_state_lock already held (from AckThreadProc below). */
 static void retry_outstanding_message_locked(const AckSlot *slot, void *user_data)
@@ -366,7 +366,7 @@ static void retry_outstanding_message_locked(const AckSlot *slot, void *user_dat
 static void drain_ack_socket_locked(int fd)
 {
   /* static: AckRecvResult embeds a 70000-byte reconstruction buffer
-   * (OTP_FW_ACK_MAX_REDELIVER) - see main.c's identical reasoning for
+   * (OTP_FW_ACK_MAX_REDELIVER) - see otp_firewalld.c's identical reasoning for
    * why this must not be a stack local. */
   static AckRecvResult res;
   for (;;)
@@ -429,7 +429,7 @@ static DWORD WINAPI AckThreadProc(LPVOID unused)
     /* Timeouts are scanned on every loop iteration regardless of
      * whether select() found anything readable - the whole point of
      * the short select() timeout above is to guarantee this runs
-     * roughly every OTP_FW_ACK_TICK_MS, the same cadence main.c's
+     * roughly every OTP_FW_ACK_TICK_MS, the same cadence otp_firewalld.c's
      * OTP_FW_TICK_INTERVAL_SECONDS drives on Linux. */
     ack_scan_timeouts(&g_ctx.acks, OTP_FW_ACK_DEFAULT_TIMEOUT_SECONDS, retry_outstanding_message_locked, NULL);
     LeaveCriticalSection(&g_state_lock);
@@ -548,7 +548,7 @@ static int startup(void)
     fprintf(stderr, "Error: failed to load keychain\n");
     return -1;
   }
-  /* Required for the same reason main.c documents at length: without
+  /* Required for the same reason otp_firewalld.c documents at length: without
    * this, encrypt/decrypt_with_contact() block on an interactive
    * delivery-confirmation prompt this service, with no console, could
    * never answer. Genuinely true by the time it's consulted, though,
@@ -559,7 +559,7 @@ static int startup(void)
   if (otp_fw_log_init() != 0)
     return -1;
 
-  /* AF_INET must succeed - see main.c's identical reasoning. AF_INET6
+  /* AF_INET must succeed - see otp_firewalld.c's identical reasoning. AF_INET6
    * is best-effort. */
   g_ack_fd4 = ack_socket_open(AF_INET);
   if (g_ack_fd4 < 0)
@@ -576,7 +576,7 @@ static int startup(void)
   reload_config_and_push();
 
   /* Crash/restart recovery - see ack.h's ack_recover_outstanding() doc
-   * comment and main.c's identical call. Must run before the device is
+   * comment and otp_firewalld.c's identical call. Must run before the device is
    * opened and any real traffic is processed. */
   ack_recover_outstanding(&g_ctx.acks, &g_ctx.cfg);
 

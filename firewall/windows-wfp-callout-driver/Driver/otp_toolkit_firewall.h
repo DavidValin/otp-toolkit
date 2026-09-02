@@ -52,8 +52,8 @@
  * duplicate of the whole candidate table. */
 #define OTP_FW_MAX_CANDIDATE_TEXT (1 << 20) /* matches the other platforms' generous config-push cap */
 
-/* Named otp_fw_pkt_direction_t, not otp_fw_direction_t: firewall/daemon
- * /common.h - included by Service/ alongside this header - already
+/* Named otp_fw_pkt_direction_t, not otp_fw_direction_t: this directory's
+ * own common.h - included by Service/ alongside this header - already
  * defines its own otp_fw_direction_t (OTP_FW_DIR_EGRESS/INGRESS) for
  * the platform-portable codec API, and the two enums must not collide
  * in a translation unit that includes both. */
@@ -83,7 +83,7 @@ typedef enum
 
 /* One candidate (contact) IP, as pushed by OTP_FW_IOCTL_SET_CANDIDATES.
  * Defined here rather than in otp_firewall_driver.h because both the
- * kernel driver AND userspace (Service/kernel_ctl_windows.c) need the
+ * kernel driver AND userspace (Service/kernel_ctl.c) need the
  * identical layout, and userspace cannot include
  * otp_firewall_driver.h - that header pulls in kernel-only WDK headers
  * (ntddk.h, fwpsk.h, fwpmk.h) that don't exist for a usermode build. */
