@@ -52,7 +52,7 @@ the remaining uncertainty matters:
    table, and the sysctl kill switch** — ordinary, well-documented
    FreeBSD device-driver patterns (the same shape `/dev/bpf` and similar
    drivers use). Highest-confidence part of the module.
-6. **`Shared/packet_codec.c`** — the highest-confidence file
+6. **`packet_codec.c`** — the highest-confidence file
    dealing with wire-format bytes in this port: glibc (on the Linux
    machine this was written on) optionally provides the same BSD-compat
    `struct ip`/`struct tcphdr`/`struct udphdr` definitions FreeBSD uses
@@ -167,7 +167,7 @@ These files are byte-identical to Linux's copies, unmodified:
 need one, named identically to their Linux counterparts (no `_freebsd`
 suffix — the containing directory is what identifies the platform now):
 
-- `Shared/packet_codec.c` — same public API as `packet_codec.h`,
+- `packet_codec.c` — same public API as `packet_codec.h`,
   BSD header field names (see the Status section above).
 - `kernel_ctl.c` — same public API as `kernel_ctl.h`, pushes
   candidates via `ioctl(OTP_FW_IOC_SET_CANDIDATES)` instead of a
@@ -220,7 +220,7 @@ cc -O2 -Wall -Isrc -Ifirewall/freebsd-kernel-module \
    -o otp_firewalld \
    firewall/freebsd-kernel-module/otp_firewalld.c \
    firewall/freebsd-kernel-module/kernel_ctl.c \
-   firewall/freebsd-kernel-module/Shared/packet_codec.c \
+   firewall/freebsd-kernel-module/packet_codec.c \
    firewall/freebsd-kernel-module/config.c firewall/freebsd-kernel-module/pin.c \
    firewall/freebsd-kernel-module/trial.c firewall/freebsd-kernel-module/checksum.c \
    firewall/freebsd-kernel-module/log.c firewall/freebsd-kernel-module/keychain_setup.c \

@@ -2,7 +2,7 @@
  * packet_codec.c - Windows port of firewall/linux-kernel-module/packet_codec.c.
  *
  * UNVERIFIED: written without access to a Windows toolchain (MSVC/MinGW)
- * to compile it against - see ../README.md.
+ * to compile it against - see README.md.
  *
  * Unlike the macOS port (which reuses Darwin's own native BSD
  * <netinet/*.h> structs), this file defines its own byte-exact,
@@ -260,7 +260,7 @@ int otp_fw_header_length(const unsigned char *pkt, int pkt_len)
 
 /* No ICMPv6 check lives in this file: the kernel driver exempts ICMPv6
  * entirely at its own fast-path candidate check (see
- * ../Driver/otp_firewall_driver.c's otp_fw_driver_is_icmpv6()) before an
+ * Driver/otp_firewall_driver.c's otp_fw_driver_is_icmpv6()) before an
  * ICMPv6 packet is ever queued to this userspace service at all - the
  * same reason firewall/linux-kernel-module/otp_firewall.c's exemption
  * lives only in the kernel module, with no matching logic in

@@ -160,7 +160,7 @@ copies beyond those guards:
 need one, named identically to their Linux counterparts (no `_windows`
 suffix — the containing directory is what identifies the platform now):
 
-- `Shared/packet_codec.c` — same public API as `packet_codec.h`,
+- `packet_codec.c` — same public API as `packet_codec.h`,
   but with this project's own `#pragma pack(push,1)` IPv4/IPv6/TCP/UDP
   wire-format structs instead of relying on any OS-provided header (Windows
   has no standard `struct iphdr`/`struct ip` the way POSIX systems do).
@@ -202,11 +202,11 @@ source.
 ### 2. Build the service and control tool
 
 Compile `Service/otp_firewalld.c` (plus the daemon-support files listed
-above and `Shared/packet_codec.c`, `Service/kernel_ctl.c` — everything
+above and `packet_codec.c`, `Service/kernel_ctl.c` — everything
 needed lives directly in this directory now, no other directory's sources
 are involved except `src/`) into `otp_firewalld.exe` using a normal Win32
 console/service project, and `Ctl/otpfwctl.c` into `otpfwctl.exe`.
-`Shared/packet_codec.c` uses `fmemopen()`/`open_memstream()`
+`packet_codec.c` uses `fmemopen()`/`open_memstream()`
 (POSIX.1-2008), which MinGW-w64 provides but raw MSVC's CRT does not —
 building the service with MinGW (the same toolchain this project's own
 `make mingw` target already cross-compiles the core library with) is

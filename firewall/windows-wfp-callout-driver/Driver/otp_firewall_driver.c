@@ -333,7 +333,7 @@ static void OtpFwClassifyCommon(
 
   /* ICMPv6 exemption lives here, in the kernel fast path, never in
    * userspace - see otp_firewall_driver.h's OtpFwIsIcmpv6 comment and
-   * Shared/packet_codec.c's matching forward-reference. */
+   * packet_codec.c's matching forward-reference (this directory's own copy). */
   if (is_v6 && OtpFwIsIcmpv6(l4_proto))
   {
     classifyOut->actionType = FWP_ACTION_PERMIT;

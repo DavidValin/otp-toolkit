@@ -2,7 +2,7 @@
  * packet_codec.c - macOS port of firewall/linux-kernel-module/packet_codec.c.
  *
  * UNVERIFIED: written without access to a macOS SDK/Xcode/compiler - see
- * ../README.md for the full list of what that means here. The only
+ * README.md for the full list of what that means here. The only
  * change from the Linux version is header-struct field names: Darwin's
  * <netinet/ip.h>/<netinet/tcp.h>/<netinet/udp.h> are natively
  * BSD-style (struct ip/ip_hl/ip_p, struct tcphdr/th_sport/th_off, struct
@@ -63,7 +63,7 @@ typedef struct
  * ip_off in HOST byte order, not network order) for context: if it ever
  * turns out NEPacketTunnelProvider inherits that quirk for these two
  * fields specifically, the ntohs() calls on tot_len below would need to
- * become no-ops. Unverified either way - flagged in ../README.md. */
+ * become no-ops. Unverified either way - flagged in README.md. */
 static int parse_packet(const unsigned char *pkt, int pkt_len, ParsedPacket *pp)
 {
   if (pkt_len < 1)
@@ -105,7 +105,7 @@ static int parse_packet(const unsigned char *pkt, int pkt_len, ParsedPacket *pp)
     pp->family = 6;
     pp->ip_hlen = sizeof(struct ip6_hdr);
     /* Extension headers are not walked (documented v1 scope limit in
-     * ../../README.md's "Limitations"): ip6_nxt is trusted to already
+     * ../README.md's "Limitations"): ip6_nxt is trusted to already
      * name the L4 protocol directly. */
     pp->proto = ip6->ip6_nxt;
     pp->v6_src = ip6->ip6_src;

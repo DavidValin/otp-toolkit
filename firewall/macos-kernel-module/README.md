@@ -58,7 +58,7 @@ headers or documentation. In descending order of how much it matters:
    method names like `readPacketObjects`/`writePacketObjects`, and
    `NEPacket.direction`/`.protocolFamily`'s exact types. See the
    confidence notes at the top of that file.
-4. Everything in `Shared/packet_codec.c` (the BSD header struct
+4. Everything in `packet_codec.c` (the BSD header struct
    field names — `struct ip`'s `ip_hl`/`ip_p`, `struct tcphdr`'s
    `th_sport`/`th_off`, `struct udphdr`'s `uh_sport`/`uh_ulen`) is
    well-established, decades-stable BSD sockets API — this is the part
@@ -149,7 +149,7 @@ reference, unmodified**, byte-identical to Linux's copies:
   `packet_codec.h` (just the header — its declared API has no
   platform-specific types)
 
-...and compiles `Shared/packet_codec.c` (this directory's own
+...and compiles `packet_codec.c` (this directory's own
 macOS-specific body, named identically to Linux's file — no `_macos`
 suffix, the containing directory is what identifies the platform now)
 **instead of** Linux's `packet_codec.c` — same public API, BSD header
@@ -192,9 +192,10 @@ to open than something useful. Create the project shell yourself:
 3. In Xcode: **File > New > Project > App**, then **File > New > Target >
    Network Extension** (choose Packet Tunnel) to add the extension
    target, embedded in the app.
-4. Add the daemon-support files listed above (they live directly in this
-   directory), plus everything in this directory's `Shared/` and
-   `Extension/`, to the extension target. Add `App/*` to the app target.
+4. Add the daemon-support files listed above and `packet_codec.c` (they
+   all live directly in this directory), plus everything in this
+   directory's `Extension/`, to the extension target. Add `App/*` to the
+   app target.
 5. Set the extension target's **Objective-C Bridging Header** build
    setting to `OTPFirewallExtension-Bridging-Header.h`.
 6. Set both targets' entitlements file (Signing & Capabilities) to the

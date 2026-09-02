@@ -9,7 +9,7 @@
  * struct ip6_hdr/ip6_nxt/ip6_plen field names Darwin (macOS) itself
  * derives from, decades-stable and unchanged across the BSD family. This
  * file is therefore closer to a straight copy of
- * ../../macos-kernel-module/Shared/packet_codec.c than a genuine
+ * ../macos-kernel-module/packet_codec.c than a genuine
  * rewrite - only this header comment and the include list differ; every
  * function body is identical. Every non-header-name-dependent function
  * (resolve_egress_contact, otp_fw_classify_egress/_ingress,
@@ -95,7 +95,7 @@ static int parse_packet(const unsigned char *pkt, int pkt_len, ParsedPacket *pp)
     pp->family = 6;
     pp->ip_hlen = sizeof(struct ip6_hdr);
     /* Extension headers are not walked (documented v1 scope limit in
-     * ../../README.md's "Limitations"): ip6_nxt is trusted to already
+     * ../README.md's "Limitations"): ip6_nxt is trusted to already
      * name the L4 protocol directly. */
     pp->proto = ip6->ip6_nxt;
     pp->v6_src = ip6->ip6_src;
