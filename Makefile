@@ -21,7 +21,7 @@ ifeq ($(VERSION),)
   VERSION := (unknown version)
 endif
 
-.PHONY: build test install
+.PHONY: build test install firewall-daemon firewall-ctl firewall-kmod install-firewall
 
 build:
 	@echo
@@ -75,6 +75,58 @@ musl:
 	@echo " - Testing..."
 	@sh test/report.sh || { rm -f $(BIN); exit 1; }
 	@echo " - Tested!"
+	@echo
+
+# OTP_TOOLKIT_FIREWALL - see firewall/README.md. Separate from the targets
+# above: building/installing the firewall never affects the plain otp CLI.
+# All firewall sources for Linux live in firewall/linux-kernel-module/
+# (self-contained: kernel module, daemon, and otpfwctl controller CLI -
+# no shared firewall/daemon/ directory, same on every platform).
+FIREWALL_DIR := firewall/linux-kernel-module
+FIREWALL_BIN := bin/otp_firewalld
+FIREWALL_CTL_BIN := bin/otpfwctl
+
+firewall-daemon:
+	@echo
+	@echo " - Building otp_firewalld..."
+	@mkdir -p bin
+	@$(CC) $(BUILD_FLAGS) -Isrc -o $(FIREWALL_BIN) \
+		$(FIREWALL_DIR)/otp_firewalld.c $(FIREWALL_DIR)/config.c $(FIREWALL_DIR)/pin.c \
+		$(FIREWALL_DIR)/trial.c $(FIREWALL_DIR)/packet_codec.c $(FIREWALL_DIR)/checksum.c \
+		$(FIREWALL_DIR)/log.c $(FIREWALL_DIR)/kernel_ctl.c $(FIREWALL_DIR)/keychain_setup.c \
+		$(FIREWALL_DIR)/ack.c \
+		src/cipher.c src/keychain.c src/commit.c \
+		$$(pkg-config --cflags --libs libnetfilter_queue) || exit 1
+	@echo " - Built $(FIREWALL_BIN)!"
+	@echo
+
+firewall-ctl:
+	@echo
+	@echo " - Building otpfwctl..."
+	@mkdir -p bin
+	@$(CC) $(BUILD_FLAGS) -o $(FIREWALL_CTL_BIN) $(FIREWALL_DIR)/otpfwctl.c || exit 1
+	@echo " - Built $(FIREWALL_CTL_BIN)!"
+	@echo
+
+firewall-kmod:
+	@echo
+	@echo " - Building otp_firewall.ko (needs the running kernel's headers installed)..."
+	@$(MAKE) -C /lib/modules/$$(uname -r)/build M=$$(pwd)/$(FIREWALL_DIR) modules
+	@echo
+
+install-firewall: firewall-daemon firewall-ctl firewall-kmod
+	@if [ ! -f $(FIREWALL_BIN) ] || [ ! -f $(FIREWALL_CTL_BIN) ]; then \
+		echo "Error: $(FIREWALL_BIN)/$(FIREWALL_CTL_BIN) not found - run 'make firewall-daemon firewall-ctl' first"; \
+		exit 1; \
+	fi
+	@echo
+	@echo " - Installing otp_firewalld and otpfwctl..."
+	@mv $(FIREWALL_BIN) /usr/local/bin/otp_firewalld
+	@mv $(FIREWALL_CTL_BIN) /usr/local/bin/otpfwctl
+	@echo " - Installed! Load the kernel module with:"
+	@echo "     sudo insmod firewall/linux-kernel-module/otp_firewall.ko"
+	@echo "   then run 'sudo otp_firewalld' - see firewall/linux-kernel-module/README.md"
+	@echo "   for the kill switch (otpfwctl), log-only rollout mode, and firewall.config format."
 	@echo
 
 mingw:
