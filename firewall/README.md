@@ -277,6 +277,22 @@ compile/configure/activate/deactivate instructions:
   machine; the daemon and CLI compile, link, and run successfully against
   the real `otp` library on Linux (see its README), which is as close to
   verified as anything not run on real FreeBSD can get.
+- **[OpenBSD Kernel Patch](openbsd-7.9-patch/README.md)** — targets
+  OpenBSD 7.9 specifically (see its own README - this one isn't a
+  portable-by-construction module like the others, the patch is tied to
+  that release's kernel source). No loadable module: OpenBSD dropped
+  loadable kernel modules in 2015, so this is a real hook statically
+  compiled into a custom kernel instead
+  (`kernel/otpfw.c`, patched into `ip_input.c`/`ip_output.c`/
+  `ip6_input.c`/`ip6_output.c` next to `pf(4)`'s own `pf_test()` call
+  sites - `pf` itself isn't a loaded module either), plus a userspace
+  daemon (`otp_firewalld`) and control CLI (`otpfwctl`) talking to it
+  over a custom character device (`/dev/otpfw`). Never compiled or run on
+  a real OpenBSD machine, and this platform's kernel-side code needed a
+  real kernel source tree this project doesn't have access to; the
+  userspace daemon and control CLI compile, link, and run successfully
+  against the real `otp` library on Linux (see its README), the same
+  verification bar the FreeBSD port's userspace half holds itself to.
 
 Maturity differs sharply between them — see each platform's own README for
 exactly what is and isn't verified before relying on it for anything.

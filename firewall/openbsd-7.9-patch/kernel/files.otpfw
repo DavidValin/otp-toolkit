@@ -1,0 +1,13 @@
+# files.otpfw - lines to add to sys/conf/files in your OpenBSD kernel
+# source tree (see ../README.md's "Kernel integration", step 2).
+#
+# Modeled directly on bpf(4)'s own real, well-known sys/conf/files
+# entry (`pseudo-device bpfilter: ifnet` / `file net/bpf.c bpfilter
+# needed`) - the same pattern every pseudo-device in the kernel config
+# language ties a `pseudo-device NAME` config(8) line to both a source
+# file and the NNAME count macro (here, NOTPFW) that otpfwvar.h's
+# `#if NOTPFW > 0` depends on. UNVERIFIED against a real current
+# sys/conf/files - see ../README.md's Status section.
+
+pseudo-device	otpfw
+file	net/otpfw.c			otpfw needed
