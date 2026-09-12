@@ -1552,11 +1552,21 @@ static void parse_contact_fields(FILE *f, Contact *c)
       break;
 
     char key[256];
-    // Split at the first '='; the value is copied manually so its length
-    // is not capped by a sscanf field width (key file paths can be long)
+    // Split at the first '='; both halves are copied manually with memcpy/
+    // strncpy rather than sscanf's %[^=] scanset, which Cosmopolitan Libc's
+    // sscanf does not implement (it always returns -1 for a scanset
+    // conversion, glibc/musl semantics elsewhere). The value side already
+    // avoided a width-capped scanf conversion so long key file paths
+    // wouldn't truncate; this does the same for the key side.
     char *equals = strchr(line, '=');
-    if (equals && sscanf(line, "%255[^=]", key) == 1)
+    if (equals)
     {
+      size_t key_len = (size_t)(equals - line);
+      if (key_len >= sizeof(key))
+        key_len = sizeof(key) - 1;
+      memcpy(key, line, key_len);
+      key[key_len] = '\0';
+
       // Copy everything after '=' to value
       strncpy(value, equals + 1, FIELD_LINE_BUFFER_SIZE - 1);
       value[FIELD_LINE_BUFFER_SIZE - 1] = '\0';

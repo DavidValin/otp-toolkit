@@ -16,12 +16,20 @@ endif
 
 BIN := bin/otp$(BIN_EXT)
 
+# cosmocc (https://github.com/jart/cosmopolitan) - not part of a normal
+# toolchain, so fall back to the default install location if it isn't on
+# PATH.
+COSMOCC := $(shell command -v cosmocc 2>/dev/null)
+ifeq ($(COSMOCC),)
+  COSMOCC := $(HOME)/cosmocc/bin/cosmocc
+endif
+
 VERSION := $(shell sed -n 's/.*otp-toolkit v\([0-9][0-9.]*\).*/\1/p' src/cli.c 2>/dev/null | head -1)
 ifeq ($(VERSION),)
   VERSION := (unknown version)
 endif
 
-.PHONY: build test install
+.PHONY: build test install cosmocc
 
 build:
 	@echo
@@ -66,6 +74,30 @@ install:
 	@echo " - Man page installed to /usr/local/share/man/man1/otp.1"
 
 ifneq ($(OS),Windows_NT)
+cosmocc:
+	@echo
+	@echo " - Building with cosmocc (https://github.com/jart/cosmopolitan)..."
+	@if [ ! -x "$(COSMOCC)" ]; then \
+		echo "Error: cosmocc not found at '$(COSMOCC)' - install it from https://cosmo.zip/pub/cosmocc/cosmocc.zip"; \
+		exit 1; \
+	fi
+	@mkdir -p bin
+	@$(COSMOCC) -O2 -Wall -D_FILE_OFFSET_BITS=64 -o bin/otp-cosmocc src/cli.c src/keychain.c src/cipher.c src/commit.c || exit 1
+	@echo " - Built!"
+	@echo " - Testing..."
+	@if [ -f bin/otp ]; then mv bin/otp bin/otp.saved-by-cosmocc-target; fi; \
+	cp bin/otp-cosmocc bin/otp; \
+	sh test/report.sh; rc=$$?; \
+	rm -f bin/otp; \
+	if [ -f bin/otp.saved-by-cosmocc-target ]; then mv bin/otp.saved-by-cosmocc-target bin/otp; fi; \
+	if [ $$rc -ne 0 ]; then rm -f bin/otp-cosmocc; exit 1; fi
+	@echo " - Tested!"
+	@echo
+	@echo "otp-toolkit $(VERSION) built as a Cosmopolitan APE binary: ./bin/otp-cosmocc"
+	@echo "This single binary runs unmodified on Linux, macOS, Windows, FreeBSD 13+,"
+	@echo "OpenBSD 7.3+, and NetBSD 9.2+ - no separate builds needed for those targets."
+	@echo
+
 musl:
 	@echo
 	@echo " - Building musl static binary..."
